@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# OS
+.DS_Store
+
+# Local replay store — kept out of git, the DB is the source of truth
+recordings/
+
+# WAL / SHM sidecars from active SQLite connections (may be large or stale)
+data/*.db-wal
+data/*.db-shm
+
+# Local test screenshots (contain other players' BattleTags)
+Snipaste_*.png
+Snipaste_*.jpg
+test.jpeg
+test.jpg
+test.png
+*.StormReplay
