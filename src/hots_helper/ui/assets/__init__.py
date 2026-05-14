@@ -31,12 +31,9 @@ def app_icon() -> QIcon:
         path = _ASSETS_DIR / f"icon-{size}.png"
         if path.is_file():
             icon.addPixmap(QPixmap(str(path)))
-    if icon.isNull():
-        # Fallback: render the SVG directly. Slower at app start but
-        # better than a blank window in the rare case the PNGs got lost.
-        svg = _ASSETS_DIR / "icon.svg"
-        if svg.is_file():
-            icon = QIcon(str(svg))
+    # Note: deliberately no SVG fallback here — that would require
+    # bundling Qt's svg image-format plugin (~3 MB) just for an unlikely
+    # case. The PNGs are committed and shipped alongside the .py file.
     return icon
 
 

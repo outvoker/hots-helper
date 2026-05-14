@@ -106,13 +106,11 @@ try:
 except Exception:
     pass
 
-# heroprotocol's versions/ dir also needs to be in the bundle so the parser
-# can dynamically import whichever protocol matches the replay's build.
-try:
-    import heroprotocol.versions as _hv
-    datas.append((str(Path(_hv.__file__).parent), "heroprotocol/versions"))
-except Exception:
-    pass
+# NOTE: we used to bundle heroprotocol/versions/ here. The parser now
+# uses our own ``hots_helper.vendor.protocol*`` files exclusively (the
+# upstream package can't even import in our frozen build because its
+# __init__ chain reaches for the removed ``imp`` module on Python 3.12+).
+# Skipping it saves ~8 MB.
 
 hiddenimports = [
     # Make sure the whole hots_helper package and submodules ship — PyInstaller
@@ -185,6 +183,66 @@ if sys.platform == "win32":
 elif sys.platform == "darwin":
     hiddenimports += ["hots_helper.ocr.vision_macos"]
 
+# --- Qt binary / data filter ----------------------------------------------
+# Even after excluding the Python sub-modules, PyInstaller's PySide6 hook
+# still drags every Qt6 DLL/dylib into ``a.binaries`` and every Qt
+# translation/QML/plugin into ``a.datas``. Filter them out here. Anything
+# under PySide6/Qt/{plugins,translations,qml,…} that matches a substring
+# in ``_QT_DROP_TOKENS`` is removed from the final bundle.
+#
+# Tokens are matched case-insensitively against the destination path. Be
+# careful not to match shared deps: e.g. don't add ``Network`` (matches
+# Qt6Network.dll only on Win, but on Linux some other lib might collide).
+_QT_DROP_TOKENS = (
+    # Qt sub-frameworks we don't use
+    "Qt6Network", "Qt63D", "Qt6Bluetooth", "Qt6Charts", "Qt6Concurrent",
+    "Qt6DataVisualization", "Qt6DBus", "Qt6Designer", "Qt6Graphs",
+    "Qt6Help", "Qt6Http", "Qt6Location", "Qt6Multimedia", "Qt6Nfc",
+    "Qt6OpenGL", "Qt6Pdf", "Qt6Positioning", "Qt6PrintSupport",
+    "Qt6Qml", "Qt6Quick", "Qt6RemoteObjects", "Qt6Scxml", "Qt6Sensors",
+    "Qt6Serial", "Qt6SpatialAudio", "Qt6Sql", "Qt6StateMachine",
+    "Qt6Svg", "Qt6Test", "Qt6TextToSpeech", "Qt6UiTools", "Qt6Web",
+    "Qt6WebChannel", "Qt6WebEngine", "Qt6WebSockets", "Qt6Xml",
+    "Qt5Compat",
+    # Qt asset trees
+    "PySide6/Qt/qml/", "PySide6/Qt/translations/",
+    "PySide6/Qt/resources/", "PySide6/Qt/lib/QtWebEngineCore",
+    "PySide6/Qt/plugins/multimedia",
+    "PySide6/Qt/plugins/sqldrivers",
+    "PySide6/Qt/plugins/position",
+    "PySide6/Qt/plugins/sensors",
+    "PySide6/Qt/plugins/scxml",
+    "PySide6/Qt/plugins/printsupport",
+    "PySide6/Qt/plugins/networkinformation",
+    "PySide6/Qt/plugins/tls",
+    "PySide6/Qt/plugins/canbus",
+    "PySide6/Qt/plugins/geometryloaders",
+    "PySide6/Qt/plugins/renderers",
+    "PySide6/Qt/plugins/sceneparsers",
+    "PySide6/Qt/plugins/webview",
+    # opengl is bulky and we don't render 3D
+    "Qt6OpenGL", "opengl32sw",
+    # Devtools we never invoke
+    "PySide6/qmlls", "PySide6/qmlformat", "PySide6/Designer",
+    "PySide6/Linguist", "PySide6/Assistant", "PySide6/lupdate",
+    "PySide6/lrelease", "PySide6/qmllint", "PySide6/qmlimportscanner",
+    "PySide6/qmlcachegen", "PySide6/qmlpreview", "PySide6/qmlplugindump",
+    "PySide6/qmlprofiler", "PySide6/qmlscene", "PySide6/qmltyperegistrar",
+    "PySide6/Assistant.app", "PySide6/Designer.app", "PySide6/Linguist.app",
+)
+
+
+def _drop_qt_extras(entries):
+    """Filter (name, src, kind) tuples in ``a.binaries`` / ``a.datas``."""
+    out = []
+    for entry in entries:
+        dest = entry[0].replace("\\", "/")
+        if any(tok.lower() in dest.lower() for tok in _QT_DROP_TOKENS):
+            continue
+        out.append(entry)
+    return out
+
+
 a = Analysis(
     [str(entry)],
     pathex=[str(project_root / "src")],
@@ -193,12 +251,78 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["pytest", "PIL.ImageQt"],
+    excludes=[
+        "pytest",
+        "PIL.ImageQt",
+        # We don't import heroprotocol at runtime — vendored copies only.
+        "heroprotocol",
+        # PySide6: drop every Qt sub-module we don't import. The default
+        # PySide6 hook tries to ship every Qt6 .dll plus every Python
+        # binding (QtNetwork, QtMultimedia, QtSvg, Qt3D, Charts, Web*, …),
+        # which is roughly 80–120 MB we don't need. We use only QtCore,
+        # QtGui, QtWidgets — everything else goes.
+        "PySide6.Qt3DAnimation",
+        "PySide6.Qt3DCore",
+        "PySide6.Qt3DExtras",
+        "PySide6.Qt3DInput",
+        "PySide6.Qt3DLogic",
+        "PySide6.Qt3DRender",
+        "PySide6.QtBluetooth",
+        "PySide6.QtCharts",
+        "PySide6.QtConcurrent",
+        "PySide6.QtDataVisualization",
+        "PySide6.QtDBus",
+        "PySide6.QtDesigner",
+        "PySide6.QtGraphs",
+        "PySide6.QtGraphsWidgets",
+        "PySide6.QtHelp",
+        "PySide6.QtHttpServer",
+        "PySide6.QtLocation",
+        "PySide6.QtMultimedia",
+        "PySide6.QtMultimediaWidgets",
+        "PySide6.QtNetwork",
+        "PySide6.QtNetworkAuth",
+        "PySide6.QtNfc",
+        "PySide6.QtOpenGL",
+        "PySide6.QtOpenGLWidgets",
+        "PySide6.QtPdf",
+        "PySide6.QtPdfWidgets",
+        "PySide6.QtPositioning",
+        "PySide6.QtPrintSupport",
+        "PySide6.QtQml",
+        "PySide6.QtQuick",
+        "PySide6.QtQuick3D",
+        "PySide6.QtQuickControls2",
+        "PySide6.QtQuickWidgets",
+        "PySide6.QtRemoteObjects",
+        "PySide6.QtScxml",
+        "PySide6.QtSensors",
+        "PySide6.QtSerialBus",
+        "PySide6.QtSerialPort",
+        "PySide6.QtSpatialAudio",
+        "PySide6.QtSql",
+        "PySide6.QtStateMachine",
+        "PySide6.QtSvg",
+        "PySide6.QtSvgWidgets",
+        "PySide6.QtTest",
+        "PySide6.QtTextToSpeech",
+        "PySide6.QtUiTools",
+        "PySide6.QtWebChannel",
+        "PySide6.QtWebEngineCore",
+        "PySide6.QtWebEngineQuick",
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.QtWebSockets",
+        "PySide6.QtXml",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# Strip the unused Qt assets pulled in by PySide6's default hook.
+a.binaries = _drop_qt_extras(a.binaries)
+a.datas = _drop_qt_extras(a.datas)
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
