@@ -137,6 +137,16 @@ class MainWindow(QMainWindow):
         hb.addStretch(1)
         root.addWidget(hk_box)
 
+        # --- Stats tools ------------------------------------------------------
+        tools_box = QGroupBox("Stats tools")
+        tb = QHBoxLayout(tools_box)
+        aram_btn = QPushButton("天命乱斗英雄强度榜")
+        aram_btn.setToolTip("基于本地数据库展示 ARAM 各英雄的强度排行")
+        aram_btn.clicked.connect(self._show_aram_ranking)
+        tb.addWidget(aram_btn)
+        tb.addStretch(1)
+        root.addWidget(tools_box)
+
         # --- Log --------------------------------------------------------------
         log_box = QGroupBox("Activity")
         lb = QVBoxLayout(log_box)
@@ -148,6 +158,8 @@ class MainWindow(QMainWindow):
         # --- Runtime: store, workers, hotkey, popup --------------------------
         self._scan_thread: QThread | None = None
         self._scan_worker: ScanWorker | None = None
+        # Lazily created when the user first clicks the ARAM button.
+        self._aram_dialog = None
 
         self.watch_worker = WatchWorker(self.store)
         self.watch_worker.ingested.connect(self._on_watch_ingested)
@@ -310,6 +322,15 @@ class MainWindow(QMainWindow):
 
     def _test_popup(self) -> None:
         self._on_hotkey()
+
+    def _show_aram_ranking(self) -> None:
+        """Open the ARAM hero strength dialog (lazy-init, reused across opens)."""
+        if not hasattr(self, "_aram_dialog") or self._aram_dialog is None:
+            from .aram import AramRankingDialog
+            self._aram_dialog = AramRankingDialog(self.store, parent=self)
+        self._aram_dialog.show()
+        self._aram_dialog.raise_()
+        self._aram_dialog.activateWindow()
 
     def _on_hotkey(self) -> None:
         # Reentry guard: if the user spams the hotkey while OCR is running

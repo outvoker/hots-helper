@@ -502,16 +502,6 @@ class PopupWindow(QWidget):
         analyze_btn.clicked.connect(self._run_analysis)
         header.addWidget(analyze_btn)
 
-        aram_btn = QPushButton("天命乱斗榜")
-        aram_btn.setToolTip("ARAM 各英雄的强度榜（基于本地数据库）")
-        aram_btn.clicked.connect(self._show_aram_ranking)
-        aram_btn.setStyleSheet(
-            "QPushButton { background:#523; color:#fcd; border:1px solid #844; "
-            "              padding: 2px 10px; border-radius: 4px; }"
-            "QPushButton:hover { background:#634; }"
-        )
-        header.addWidget(aram_btn)
-
         close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
         close_btn.clicked.connect(self.hide)
@@ -636,16 +626,6 @@ class PopupWindow(QWidget):
         self._drag_pos = None
 
     # --- analysis -------------------------------------------------------------
-
-    def _show_aram_ranking(self) -> None:
-        """Open the ARAM hero strength dialog. Reuses one instance so the
-        dialog remembers the user's filter / sort settings between opens."""
-        if not hasattr(self, "_aram_dialog") or self._aram_dialog is None:
-            from .aram import AramRankingDialog
-            self._aram_dialog = AramRankingDialog(self.store, parent=self)
-        self._aram_dialog.show()
-        self._aram_dialog.raise_()
-        self._aram_dialog.activateWindow()
 
     def _select_region_for(self, card: "_PlayerCard") -> None:
         """Open the region-select dialog and rerun OCR on the user's crop."""
