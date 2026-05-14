@@ -106,44 +106,65 @@ def _run_with_timeout(coro, progress: ProgressCallback):
 
 
 async def _load_bitmap(path: Path, progress: ProgressCallback):
-    """Read the file as a SoftwareBitmap.
+    """Decode the image via Pillow, then construct a winrt SoftwareBitmap.
 
-    We avoid ``StorageFile.get_file_from_path_async`` because that API has
-    been observed to hang in plain Win32 processes — it expects packaged-app
-    capabilities. Using an in-memory stream instead.
+    We deliberately do NOT use ``BitmapDecoder.create_async``: on several
+    winrt-python builds that call hangs forever (known interaction between
+    winrt's IAsyncOperation and the COM apartment Qt's worker thread runs
+    in). Pillow decodes to raw BGRA8 in pure Python; we then hand the
+    bytes to ``SoftwareBitmap.create_copy_from_buffer``, which is a plain
+    synchronous winrt call and behaves reliably.
     """
-    from winrt.windows.graphics.imaging import BitmapDecoder
-    from winrt.windows.storage.streams import (
-        DataWriter,
-        InMemoryRandomAccessStream,
+    from PIL import Image
+    from winrt.windows.graphics.imaging import (
+        BitmapAlphaMode,
+        BitmapPixelFormat,
+        SoftwareBitmap,
     )
+    from winrt.windows.storage.streams import Buffer, DataWriter
 
     _emit(progress, f"reading {path.stat().st_size:,} bytes from disk")
-    raw = path.read_bytes()
 
-    _emit(progress, "writing into InMemoryRandomAccessStream…")
-    stream = InMemoryRandomAccessStream()
-    writer = DataWriter(stream)
+    # Decode with Pillow into the BGRA8 layout SoftwareBitmap expects.
+    _emit(progress, "decoding image with Pillow…")
+    with Image.open(path) as im:
+        rgba = im.convert("RGBA")
+        # SoftwareBitmap BGRA8 wants B,G,R,A byte order. Swap R and B.
+        r, g, b, a = rgba.split()
+        bgra = Image.merge("RGBA", (b, g, r, a))
+        width, height = bgra.size
+        raw = bgra.tobytes()
+
+    _emit(progress, f"image decoded: {width}x{height} ({len(raw):,} bytes)")
+
+    # Wrap into a winrt Buffer. We need a DataWriter to fill it because the
+    # bare Buffer is empty by default.
+    _emit(progress, "wrapping pixels into winrt Buffer…")
+    buf = Buffer(len(raw))
+    writer = DataWriter()
     try:
         writer.write_bytes(raw)
-        await asyncio.wait_for(writer.store_async(), timeout=_BITMAP_LOAD_TIMEOUT)
+        # detach_buffer returns an IBuffer with the bytes we just wrote.
+        try:
+            buf = writer.detach_buffer()
+        except Exception:
+            # Older bindings expose the call slightly differently.
+            pass
     finally:
         try:
-            writer.detach_stream()
+            writer.close()
         except Exception:
             pass
-    stream.seek(0)
 
-    _emit(progress, "creating BitmapDecoder…")
-    decoder = await asyncio.wait_for(
-        BitmapDecoder.create_async(stream),
-        timeout=_BITMAP_LOAD_TIMEOUT,
+    _emit(progress, "constructing SoftwareBitmap…")
+    bitmap = SoftwareBitmap.create_copy_from_buffer(
+        buf,
+        BitmapPixelFormat.BGRA8,
+        width,
+        height,
+        BitmapAlphaMode.PREMULTIPLIED,
     )
-    _emit(progress, "decoding to SoftwareBitmap…")
-    return await asyncio.wait_for(
-        decoder.get_software_bitmap_async(),
-        timeout=_BITMAP_LOAD_TIMEOUT,
-    )
+    return bitmap
 
 
 # --- Recognition -----------------------------------------------------------
