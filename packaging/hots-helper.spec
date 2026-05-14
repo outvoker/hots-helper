@@ -13,7 +13,13 @@ from pathlib import Path
 block_cipher = None
 
 project_root = Path.cwd()
-entry = project_root / "src" / "hots_helper" / "ui" / "app.py"
+# Use the standalone launcher (packaging/launcher.py) as the entry
+# script. PyInstaller treats the entry as __main__, and __main__ has no
+# parent package — so importing the UI directly via app.py would break
+# every ``from ..config import …`` it does. The launcher is a plain
+# top-level script that calls ``hots_helper.ui.app.main`` after the
+# package is registered as an absolute import target.
+entry = project_root / "packaging" / "launcher.py"
 
 datas = [
     # Bundle the vendored replay protocol files; runtime scans this dir.
@@ -39,6 +45,37 @@ except Exception:
     pass
 
 hiddenimports = [
+    # Make sure the whole hots_helper package and submodules ship — PyInstaller
+    # is conservative about following dynamic imports.
+    "hots_helper",
+    "hots_helper.config",
+    "hots_helper.i18n",
+    "hots_helper.lookup",
+    "hots_helper.bp",
+    "hots_helper.stats",
+    "hots_helper.vision",
+    "hots_helper.db",
+    "hots_helper.db.store",
+    "hots_helper.parser",
+    "hots_helper.parser.replay",
+    "hots_helper.parser.protocols",
+    "hots_helper.watcher",
+    "hots_helper.watcher.ingest",
+    "hots_helper.watcher.watcher",
+    "hots_helper.cli",
+    "hots_helper.cli.main",
+    "hots_helper.ui",
+    "hots_helper.ui.app",
+    "hots_helper.ui.main_window",
+    "hots_helper.ui.popup",
+    "hots_helper.ui.aram",
+    "hots_helper.ui.region_select",
+    "hots_helper.ui.workers",
+    "hots_helper.ui.hotkey",
+    "hots_helper.ui.screenshot",
+    "hots_helper.ui.calibrate",
+    "hots_helper.ocr",
+    "hots_helper.ocr.rapid",
     "hots_helper.vendor",
     # PySide6 modules referenced only lazily
     "PySide6.QtCore",
