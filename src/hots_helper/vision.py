@@ -142,13 +142,20 @@ def _block_center_y(bbox: tuple[float, float, float, float]) -> float:
 
 
 def _pick_side(blocks: list[OcrBlock], side: str) -> tuple[list[str], list[float]]:
-    """Snap blocks to the 5 hex-slot y centers on the given side.
+    """Pull up to 5 player names from the left or right column.
 
-    For each of 5 expected slot positions we keep the closest non-chrome block
-    within ``_SLOT_Y_TOLERANCE``. Blocks that don't align — voice-chat
-    overlays, popups, the central drafter banner — are silently dropped. This
-    is what keeps Kook's "current speaker" indicator from leaking into a
-    name slot.
+    Different displays / aspect ratios push the slot Y centers around
+    enough that a hard-coded list of expected positions misses them. We
+    instead detect the actual hex layout from the screenshot:
+
+    1. Filter blocks that fall in the side's x band and aren't UI chrome.
+    2. Sort top→bottom.
+    3. Greedily group blocks separated by less than half the typical
+       inter-slot gap (~0.16 of image height); within a group, keep the
+       highest-confidence block. This drops voice-chat overlays / Kook's
+       "current speaker" banner because they sit between two real slots
+       at less than half-distance from one of them.
+    4. Pad / truncate to exactly 5 names.
     """
     def in_side(b: OcrBlock) -> bool:
         cx = _center_x(b.bbox)
@@ -159,38 +166,41 @@ def _pick_side(blocks: list[OcrBlock], side: str) -> tuple[list[str], list[float
     side_blocks = [
         b for b in blocks
         if in_side(b)
+        and 0.10 < _block_center_y(b.bbox) < 0.92
         and not _is_probably_ui_chrome(b.text)
     ]
+    side_blocks.sort(key=lambda b: _block_center_y(b.bbox))
 
-    names: list[str] = []
-    confs: list[float] = []
-    used_ids: set[int] = set()
-    for slot_y in _SLOT_Y_CENTERS:
-        # Find the unused block whose y is closest to this slot, within
-        # tolerance. Tie-break by higher confidence so OCR's lower-confidence
-        # twin (when both engines on Windows produce a near-duplicate) loses.
-        best: OcrBlock | None = None
-        best_dy = _SLOT_Y_TOLERANCE
-        for b in side_blocks:
-            if id(b) in used_ids:
-                continue
-            dy = abs(_block_center_y(b.bbox) - slot_y)
-            if dy < best_dy:
-                best_dy = dy
-                best = b
-            elif (
-                best is not None
-                and abs(dy - best_dy) < 1e-6
-                and b.confidence > best.confidence
-            ):
-                best = b
-        if best is not None:
-            used_ids.add(id(best))
-            names.append(best.text.strip())
-            confs.append(float(best.confidence))
-        else:
-            names.append("")
-            confs.append(0.0)
+    # Cluster nearby blocks. _MIN_SLOT_GAP is the smallest plausible gap
+    # between two real slot rows. The hex layout puts adjacent slots
+    # ~0.16 apart on standard 16:9; voice-chat overlays (e.g. Kook's
+    # "current speaker" chip) sit roughly halfway between two slots and
+    # land < 0.10 from one of them. Anything within this gap of the
+    # previous block is treated as a competing overlay/duplicate, and
+    # we keep the higher-confidence one.
+    _MIN_SLOT_GAP = 0.10
+    clusters: list[OcrBlock] = []
+    for b in side_blocks:
+        cy = _block_center_y(b.bbox)
+        if clusters and cy - _block_center_y(clusters[-1].bbox) < _MIN_SLOT_GAP:
+            # Same cluster as the previous block — keep the better one.
+            if b.confidence > clusters[-1].confidence:
+                clusters[-1] = b
+            continue
+        clusters.append(b)
+
+    # If we still ended up with more than 5 (more than 5 widely-spaced
+    # blocks in this column means something else is bleeding in), keep the
+    # 5 most confident, then resort by y for slot order.
+    if len(clusters) > 5:
+        clusters = sorted(clusters, key=lambda b: -b.confidence)[:5]
+        clusters.sort(key=lambda b: _block_center_y(b.bbox))
+
+    names = [b.text.strip() for b in clusters]
+    confs = [float(b.confidence) for b in clusters]
+    while len(names) < 5:
+        names.append("")
+        confs.append(0.0)
     return names, confs
 
 
