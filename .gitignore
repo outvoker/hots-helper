@@ -16,9 +16,10 @@ dist/
 # Local replay store — kept out of git, the DB is the source of truth
 recordings/
 
-# WAL / SHM sidecars from active SQLite connections (may be large or stale)
-data/*.db-wal
-data/*.db-shm
+# Per-user DB lives in the platform user-data dir, not the repo.
+# Squad-wide sharing happens via cloud sync, so the DB is no longer
+# committed to git. Keep the data/ dir out of source control entirely.
+data/
 
 # Local test screenshots (contain other players' BattleTags)
 Snipaste_*.png

@@ -55,15 +55,21 @@ def _levenshtein(a: str, b: str) -> int:
 
 
 def default_db_path() -> Path:
-    """Project-local default (used by the CLI when no --db is passed).
+    """User-data DB location, shared between CLI and UI.
 
-    The desktop UI uses :func:`hots_helper.config.default_db_path` so that
-    packaged builds store data in the user's config dir. The CLI retains
-    the project-local default so ``hots scan`` while developing doesn't
-    silently write to somewhere unexpected.
+    Lives in the platform-standard user-data dir
+    (``%APPDATA%\\hots-helper\\hots.db`` on Windows,
+    ``~/Library/Application Support/hots-helper/hots.db`` on macOS).
+
+    The DB used to live next to the repo at ``data/hots.db`` and was
+    committed to git so squad members shared it via ``git pull``. Now
+    that cloud sync handles cross-machine sharing, the DB is per-user
+    state and doesn't belong in source control.
     """
-    here = Path(__file__).resolve().parents[3]
-    return here / "data" / "hots.db"
+    # Imported lazily to avoid a circular import (config -> db -> config).
+    from ..config import default_db_path as _config_db_path
+
+    return _config_db_path()
 
 
 _PLAYER_MATCH_COLUMNS = [
