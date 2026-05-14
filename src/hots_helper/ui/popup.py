@@ -281,9 +281,32 @@ class _BanList(QFrame):
         self.body.setTextFormat(Qt.RichText)
         v.addWidget(self.body)
 
-    def set_candidates(self, cands: list[BanCandidate]) -> None:
+    def set_candidates(self, cands: list[BanCandidate],
+                       profiles=None) -> None:
         if not cands:
-            self.body.setText("<i style='color:#a88;'>no threat data for these opponents yet</i>")
+            # Tell the user why the list is empty: usually it's because the
+            # opponents haven't appeared in their local Storm League replays
+            # often enough, or aren't in the DB at all.
+            if profiles:
+                lines = [
+                    "<i style='color:#a88;'>No statistically strong signature heroes "
+                    "for these opponents yet — data is too thin.</i>"
+                ]
+                for p in profiles:
+                    name = p.display_name or p.name_searched
+                    if p.toon_handle == "":
+                        lines.append(
+                            f"&nbsp;&nbsp;• <b>{name}</b> — "
+                            "<span style='color:#a88;'>not in local DB (never played them in SL)</span>"
+                        )
+                    else:
+                        lines.append(
+                            f"&nbsp;&nbsp;• <b>{name}</b> — "
+                            f"<span style='color:#caa;'>{p.total_games} SL games seen</span>"
+                        )
+                self.body.setText("<br>".join(lines))
+            else:
+                self.body.setText("<i style='color:#a88;'>no threat data for these opponents yet</i>")
             return
         lines: list[str] = []
         for c in cands:
@@ -546,10 +569,13 @@ class PopupWindow(QWidget):
         # Ban list from enemy names only.
         enemies_filled = [n for n in enemy_names if n]
         if enemies_filled:
+            from ..bp import profile_opponents
             bans = recommend_bans(self.store, enemies_filled)
+            profiles = profile_opponents(self.store, enemies_filled)
         else:
             bans = []
-        self.ban_panel.set_candidates(bans)
+            profiles = []
+        self.ban_panel.set_candidates(bans, profiles=profiles)
 
         # Pick list keyed on map.
         if map_name:
@@ -579,6 +605,11 @@ class PopupWindow(QWidget):
         # A single-card correction may shift the enemy ban list too.
         if card in self._enemy_cards:
             enemies = [c.name for c in self._enemy_cards if c.name]
-            self.ban_panel.set_candidates(
-                recommend_bans(self.store, enemies) if enemies else []
-            )
+            if enemies:
+                from ..bp import profile_opponents
+                self.ban_panel.set_candidates(
+                    recommend_bans(self.store, enemies),
+                    profiles=profile_opponents(self.store, enemies),
+                )
+            else:
+                self.ban_panel.set_candidates([])

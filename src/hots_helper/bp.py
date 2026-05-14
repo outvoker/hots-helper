@@ -117,19 +117,20 @@ def _threats_for_handle(
     *,
     min_games: int,
     mode: str = "relative",
-    alpha: float = 0.25,
-    wilson_threshold: float = 0.50,
+    alpha: float = 0.40,
+    wilson_threshold: float = 0.40,
 ) -> list[ThreatHero]:
     """Heroes this player plays unusually well.
 
     ``mode``:
     - ``"relative"``: flag heroes where winrate is meaningfully higher than
-      this player's winrate on *other* heroes. Matches the BP question
-      "what's this specific player dangerous on?" regardless of whether
-      they're a strong player overall.
+      this player's winrate on *other* heroes.
     - ``"absolute"``: keep only heroes whose Wilson LB is ≥ ``wilson_threshold``.
-      Useful when you already know the player is good and want to filter to
-      their sure-fire picks.
+
+    Defaults are deliberately permissive because most opponents only show up
+    in the local DB 2-5 times — strict significance never passes. We err on
+    the side of giving the user some signal: any hero played at least
+    ``min_games`` times with a non-bad winrate is at least worth knowing.
     """
     hero_rows = list(store.hero_stats_for_handle(toon_handle))
     # Player baseline: total wins and games on everything other than the hero
@@ -145,19 +146,26 @@ def _threats_for_handle(
             continue
 
         wlb = wilson_lower_bound(wins, games)
+        raw_wr = (wins / games) if games else 0.0
         other_games = max(0, total_games - games)
         other_wins = max(0, total_wins - wins)
         test = two_proportion_z_test(wins, games, other_wins, other_games)
 
         if mode == "relative":
-            # Significant positive lift vs. this player's baseline.
-            if not (test.p_value < alpha and test.lift > 0):
-                # Fallback: if the player has very few other games, the z-test
-                # lacks power — admit the hero on a reasonable Wilson cut.
-                if other_games < min_games and wlb >= wilson_threshold:
-                    pass
-                else:
-                    continue
+            # Pass if any of:
+            #  (a) statistically positive lift vs. the player's baseline,
+            #  (b) the player has too few "other" games for the test to mean
+            #      anything but their hero winrate is decent on its own,
+            #  (c) raw winrate on this hero >= 60% (small sample but the
+            #      pattern is unlikely to be pure luck — better to surface
+            #      it than to hide it).
+            sig_lift = test.p_value < alpha and test.lift > 0
+            small_sample_strong = (
+                other_games < min_games and wlb >= wilson_threshold
+            )
+            empirical_strong = raw_wr >= 0.60
+            if not (sig_lift or small_sample_strong or empirical_strong):
+                continue
         else:  # absolute
             if wlb < wilson_threshold:
                 continue
@@ -188,9 +196,9 @@ def profile_opponents(
     store: Store,
     names: list[str],
     *,
-    min_games: int = 3,
-    alpha: float = 0.25,
-    wilson_threshold: float = 0.50,
+    min_games: int = 2,
+    alpha: float = 0.40,
+    wilson_threshold: float = 0.40,
     per_player_top: int = 5,
     mode: str = "relative",
 ) -> list[OpponentProfile]:
@@ -258,9 +266,9 @@ def recommend_bans(
     store: Store,
     opponent_names: list[str],
     *,
-    min_games: int = 3,
-    alpha: float = 0.25,
-    wilson_threshold: float = 0.50,
+    min_games: int = 2,
+    alpha: float = 0.40,
+    wilson_threshold: float = 0.40,
     top: int = 5,
     already_banned: set[str] | None = None,
     mode: str = "relative",
@@ -356,18 +364,25 @@ def recommend_picks(
     store: Store,
     map_name: str,
     *,
-    min_games: int = 5,
-    alpha: float = 0.10,
-    top: int = 5,
+    min_games: int = 3,
+    alpha: float = 0.20,
+    top: int = 8,
+    min_wlb: float = 0.40,
     exclude_heroes: set[str] | None = None,
 ) -> list[PickCandidate]:
     """Heroes to consider picking on this map.
 
-    A hero makes the list if:
-    - it has been played on this map at least ``min_games`` times in the DB,
-    - either its map winrate is significantly higher than its global winrate,
-    - or its Wilson lower bound on this map is above 50%.
-    Results are ranked by Wilson lower bound.
+    A hero makes the list if it has been played on this map at least
+    ``min_games`` times AND any of:
+    - map winrate is significantly higher than global winrate (p < alpha), or
+    - map Wilson lower bound is at least ``min_wlb`` (default 40%), or
+    - map raw winrate >= 60% with at least min_games games (small-sample
+      empirical strong pick).
+
+    Results are ranked by map Wilson lower bound. Defaults are deliberately
+    permissive: the local DB is too thin for strict significance to ever
+    pass on most maps. Better to give the user a slightly noisy list than
+    nothing at all.
     """
     exclude = {h.lower() for h in (exclude_heroes or set())}
     raw = store.map_hero_winrates(map_name)
@@ -385,8 +400,14 @@ def recommend_picks(
         other_wins = max(0, g_wins - m_wins)
         test = two_proportion_z_test(m_wins, m_games, other_wins, other_games)
         wlb = wilson_lower_bound(m_wins, m_games)
+        raw_wr = m_wins / m_games if m_games else 0.0
+
         significant_positive = test.p_value < alpha and test.lift > 0
-        passes = significant_positive or wlb >= 0.50
+        passes = (
+            significant_positive
+            or wlb >= min_wlb
+            or raw_wr >= 0.60
+        )
         if not passes:
             continue
 
@@ -394,7 +415,7 @@ def recommend_picks(
             hero=hero,
             map_games=m_games,
             map_wins=m_wins,
-            map_winrate=m_wins / m_games if m_games else 0.0,
+            map_winrate=raw_wr,
             map_wilson_lb=wlb,
             global_games=g_games,
             global_wins=g_wins,
