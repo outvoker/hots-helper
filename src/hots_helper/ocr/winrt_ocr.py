@@ -111,9 +111,8 @@ async def _load_bitmap(path: Path, progress: ProgressCallback):
     We deliberately do NOT use ``BitmapDecoder.create_async``: on several
     winrt-python builds that call hangs forever (known interaction between
     winrt's IAsyncOperation and the COM apartment Qt's worker thread runs
-    in). Pillow decodes to raw BGRA8 in pure Python; we then hand the
-    bytes to ``SoftwareBitmap.create_copy_from_buffer``, which is a plain
-    synchronous winrt call and behaves reliably.
+    in). Pillow decodes to raw BGRA8 in pure Python; we then construct a
+    SoftwareBitmap and copy the pixels in via ``copy_from_buffer``.
     """
     from PIL import Image
     from winrt.windows.graphics.imaging import (
@@ -121,7 +120,7 @@ async def _load_bitmap(path: Path, progress: ProgressCallback):
         BitmapPixelFormat,
         SoftwareBitmap,
     )
-    from winrt.windows.storage.streams import Buffer, DataWriter
+    from winrt.windows.storage.streams import DataWriter
 
     _emit(progress, f"reading {path.stat().st_size:,} bytes from disk")
 
@@ -137,33 +136,20 @@ async def _load_bitmap(path: Path, progress: ProgressCallback):
 
     _emit(progress, f"image decoded: {width}x{height} ({len(raw):,} bytes)")
 
-    # Wrap into a winrt Buffer. We need a DataWriter to fill it because the
-    # bare Buffer is empty by default.
-    _emit(progress, "wrapping pixels into winrt Buffer…")
-    buf = Buffer(len(raw))
+    # Pack the bytes into a winrt IBuffer.
+    _emit(progress, "packing pixels into winrt Buffer…")
     writer = DataWriter()
-    try:
-        writer.write_bytes(raw)
-        # detach_buffer returns an IBuffer with the bytes we just wrote.
-        try:
-            buf = writer.detach_buffer()
-        except Exception:
-            # Older bindings expose the call slightly differently.
-            pass
-    finally:
-        try:
-            writer.close()
-        except Exception:
-            pass
+    writer.write_bytes(raw)
+    src_buffer = writer.detach_buffer()
 
     _emit(progress, "constructing SoftwareBitmap…")
-    bitmap = SoftwareBitmap.create_copy_from_buffer(
-        buf,
-        BitmapPixelFormat.BGRA8,
-        width,
-        height,
-        BitmapAlphaMode.PREMULTIPLIED,
-    )
+    # Allocate the bitmap, then copy pixels into it. This avoids the
+    # static ``create_copy_from_buffer`` factory whose signature differs
+    # across winrt-python builds.
+    bitmap = SoftwareBitmap(BitmapPixelFormat.BGRA8, width, height,
+                            BitmapAlphaMode.PREMULTIPLIED)
+    bitmap.copy_from_buffer(src_buffer)
+    _emit(progress, "SoftwareBitmap constructed")
     return bitmap
 
 
