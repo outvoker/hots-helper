@@ -22,6 +22,14 @@ datas = [
     (str(project_root / "src" / "hots_helper" / "db" / "schema.sql"), "hots_helper/db"),
 ]
 
+# RapidOCR ships its ONNX models + config alongside the package. Without
+# this, the frozen app would need users to download models separately.
+try:
+    from PyInstaller.utils.hooks import collect_data_files
+    datas += collect_data_files("rapidocr_onnxruntime")
+except Exception:
+    pass
+
 # heroprotocol's versions/ dir also needs to be in the bundle so the parser
 # can dynamically import whichever protocol matches the replay's build.
 try:
@@ -42,6 +50,14 @@ hiddenimports = [
     "watchdog.observers.inotify",
     "watchdog.observers.kqueue",
     "watchdog.observers.polling",
+    # RapidOCR + ONNX runtime (loaded lazily by hots_helper.ocr.rapid)
+    "rapidocr_onnxruntime",
+    "hots_helper.ocr.rapid",
+    "onnxruntime",
+    "onnxruntime.capi._pybind_state",
+    "shapely",
+    "shapely.geometry",
+    "pyclipper",
 ]
 
 # Platform-specific OCR backends are imported lazily by hots_helper.ocr.

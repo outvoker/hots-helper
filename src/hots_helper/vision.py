@@ -141,6 +141,45 @@ def _block_center_y(bbox: tuple[float, float, float, float]) -> float:
     return (bbox[1] + bbox[3]) / 2
 
 
+def _select_best_grid(clusters: list[OcrBlock], n: int = 5) -> list[OcrBlock]:
+    """Pick the ``n`` blocks whose y positions best fit an evenly-spaced grid.
+
+    Real slot rows are equidistant; overlays (Kook's "current speaker"
+    chip, drafter spotlight) live off-grid. We brute-force every length-n
+    subset of clusters, score each by ``sum((cy_i - expected_i)^2)`` where
+    ``expected`` is a fitted linear sequence ``a + i*d`` over the subset's
+    ys, and return the lowest-score subset.
+
+    Cost: O(C(len, n)). Fine for n=5 and len typically <= 8.
+    """
+    from itertools import combinations
+
+    ys = [_block_center_y(b.bbox) for b in clusters]
+    best_score = float("inf")
+    best_subset: list[int] = list(range(min(n, len(clusters))))
+
+    for combo in combinations(range(len(clusters)), n):
+        sub_ys = [ys[i] for i in combo]
+        # Fit y_i ≈ a + d * i where i = 0..n-1.
+        d = (sub_ys[-1] - sub_ys[0]) / (n - 1) if n > 1 else 0
+        a = sub_ys[0]
+        residual = sum((sub_ys[i] - (a + d * i)) ** 2 for i in range(n))
+        # Penalty for extremely uneven spacing (very short or very tall):
+        # legit slots span at least ~50% of the available height.
+        span = sub_ys[-1] - sub_ys[0]
+        if span < 0.40:
+            residual += (0.40 - span) ** 2
+        # Bonus for higher average confidence so a high-conf set wins ties.
+        avg_conf = sum(clusters[i].confidence for i in combo) / n
+        residual -= avg_conf * 0.001
+
+        if residual < best_score:
+            best_score = residual
+            best_subset = list(combo)
+
+    return [clusters[i] for i in best_subset]
+
+
 def _pick_side(blocks: list[OcrBlock], side: str) -> tuple[list[str], list[float]]:
     """Pull up to 5 player names from the left or right column.
 
@@ -171,30 +210,25 @@ def _pick_side(blocks: list[OcrBlock], side: str) -> tuple[list[str], list[float
     ]
     side_blocks.sort(key=lambda b: _block_center_y(b.bbox))
 
-    # Cluster nearby blocks. _MIN_SLOT_GAP is the smallest plausible gap
-    # between two real slot rows. The hex layout puts adjacent slots
-    # ~0.16 apart on standard 16:9; voice-chat overlays (e.g. Kook's
-    # "current speaker" chip) sit roughly halfway between two slots and
-    # land < 0.10 from one of them. Anything within this gap of the
-    # previous block is treated as a competing overlay/duplicate, and
-    # we keep the higher-confidence one.
-    _MIN_SLOT_GAP = 0.10
+    # Step A: collapse near-duplicates produced by two OCR engines reading
+    # the same row.
+    _DEDUP_GAP = 0.04
     clusters: list[OcrBlock] = []
     for b in side_blocks:
         cy = _block_center_y(b.bbox)
-        if clusters and cy - _block_center_y(clusters[-1].bbox) < _MIN_SLOT_GAP:
-            # Same cluster as the previous block — keep the better one.
+        if clusters and cy - _block_center_y(clusters[-1].bbox) < _DEDUP_GAP:
             if b.confidence > clusters[-1].confidence:
                 clusters[-1] = b
             continue
         clusters.append(b)
 
-    # If we still ended up with more than 5 (more than 5 widely-spaced
-    # blocks in this column means something else is bleeding in), keep the
-    # 5 most confident, then resort by y for slot order.
+    # Step B: pick the 5 candidates that best fit an evenly-spaced grid.
+    # The five hex slots are vertically equidistant, so the right answer
+    # minimizes "deviation from a perfect 5-step linear grid". Outliers like
+    # Kook's voice-chat chip score badly because their y position breaks
+    # the equal-spacing structure.
     if len(clusters) > 5:
-        clusters = sorted(clusters, key=lambda b: -b.confidence)[:5]
-        clusters.sort(key=lambda b: _block_center_y(b.bbox))
+        clusters = _select_best_grid(clusters, n=5)
 
     names = [b.text.strip() for b in clusters]
     confs = [float(b.confidence) for b in clusters]

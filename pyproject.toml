@@ -26,6 +26,7 @@ dependencies = [
     "winrt-Windows.Foundation.Collections>=2.0.0 ; sys_platform == 'win32'",
     "pywin32>=306 ; sys_platform == 'win32'",
     "python-docx>=1.2.0",
+    "rapidocr-onnxruntime>=1.4.4",
 ]
 
 [project.scripts]
