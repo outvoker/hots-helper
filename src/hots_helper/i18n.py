@@ -271,7 +271,13 @@ _translations: dict[str, dict[str, str]] = {
     # === Hero ranking dialog ============================================
     "ui.aram.window_title": {"zh": "英雄强度榜", "en": "Hero strength ranking"},
     "ui.aram.title": {"zh": "{mode} 英雄强度榜", "en": "{mode} hero strength ranking"},
+    "ui.aram.title_with_map": {
+        "zh": "{mode} 英雄强度榜 — {map}",
+        "en": "{mode} hero strength ranking — {map}",
+    },
     "ui.aram.mode": {"zh": "模式：", "en": "Mode:"},
+    "ui.aram.map": {"zh": "地图：", "en": "Map:"},
+    "ui.aram.map_all": {"zh": "全部地图", "en": "All maps"},
     "ui.aram.mode_aram": {"zh": "天命乱斗 (ARAM)", "en": "ARAM (天命乱斗)"},
     "ui.aram.mode_sl": {"zh": "风暴联赛 (Storm League)", "en": "Storm League (风暴联赛)"},
     "ui.aram.min_games": {"zh": "最少局数：", "en": "Minimum games:"},

@@ -31,6 +31,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -54,6 +55,7 @@ from ..bp import (
 from ..db import Store
 from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
+from ..maps import all_maps
 from ..talent_names import talent_label
 from .theme import (
     BG_DEEP,
@@ -525,23 +527,24 @@ class PopupWindow(QWidget):
     def __init__(self, store: Store) -> None:
         super().__init__()
         self.store = store
-        # Qt.Tool keeps it off the taskbar / Alt-Tab; the StaysOnTop +
-        # ShowWithoutActivating combo lets the popup float over a
-        # fullscreen game without ever stealing focus, which is what
-        # would force the game to exit fullscreen / minimise.
+        # Qt.Tool keeps it off the taskbar / Alt-Tab; StaysOnTop +
+        # ShowWithoutActivating lets the popup float over a fullscreen
+        # game without stealing focus *on show*. We deliberately do NOT
+        # set Qt.WindowDoesNotAcceptFocus or focusPolicy=NoFocus on the
+        # top-level — those flags cascade and prevent any child
+        # QLineEdit from receiving keyboard input, even when the user
+        # explicitly clicks into the field. WA_ShowWithoutActivating is
+        # already enough to keep the game in the foreground; if the
+        # user clicks the popup we *want* it to take focus so they can
+        # type.
         self.setWindowFlags(
             Qt.Tool
             | Qt.WindowStaysOnTopHint
             | Qt.FramelessWindowHint
             | Qt.NoDropShadowWindowHint
-            | Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
-        # Belt-and-suspenders: even if Qt accidentally tries to focus us,
-        # Qt::NoFocus on the top-level prevents Windows from waking
-        # exclusive-fullscreen apps and minimising them.
-        self.setFocusPolicy(Qt.NoFocus)
         # Frameless popup: paint our own gold-edged border so the floating
         # window still reads as a deliberate object on top of the game.
         # ``#popupRoot`` is the object name we set below; scoping the rule
@@ -580,9 +583,18 @@ class PopupWindow(QWidget):
         header.addStretch(1)
         self.map_label = QLabel()
         header.addWidget(self.map_label)
-        self.map_edit = QLineEdit()
-        self.map_edit.setFixedWidth(180)
-        self.map_edit.returnPressed.connect(self._run_analysis)
+        # Editable combobox: the OCR may detect a name we don't have in
+        # the canonical pool (typo, new map), so still let the user type.
+        # Most of the time though they'll pick from the dropdown.
+        self.map_edit = QComboBox()
+        self.map_edit.setEditable(True)
+        self.map_edit.setInsertPolicy(QComboBox.NoInsert)
+        self.map_edit.setFixedWidth(220)
+        self.map_edit.addItem("")  # blank = no map filter
+        for name in all_maps():
+            self.map_edit.addItem(name)
+        self.map_edit.lineEdit().returnPressed.connect(self._run_analysis)
+        self.map_edit.activated.connect(lambda _i: self._run_analysis())
         header.addWidget(self.map_edit)
         self.analyze_btn = QPushButton()
         self.analyze_btn.clicked.connect(self._run_analysis)
@@ -668,7 +680,8 @@ class PopupWindow(QWidget):
         else:
             self.title.setText(t("ui.popup.title"))
         self.map_label.setText(t("ui.popup.map"))
-        self.map_edit.setPlaceholderText(t("ui.popup.map_placeholder"))
+        if hasattr(self.map_edit, "lineEdit"):
+            self.map_edit.lineEdit().setPlaceholderText(t("ui.popup.map_placeholder"))
         self.analyze_btn.setText(t("ui.popup.analyze"))
         # Side column titles
         if hasattr(self, "_ally_col"):
@@ -718,7 +731,7 @@ class PopupWindow(QWidget):
     ) -> None:
         self._screenshot_path = screenshot_path
         if map_name is not None:
-            self.map_edit.setText(map_name)
+            self.map_edit.setCurrentText(map_name)
         if ally_names:
             confs = ally_confidences or [1.0] * 5
             for i, n in enumerate(ally_names[:5]):
@@ -915,7 +928,7 @@ class PopupWindow(QWidget):
         """Re-run the two ban analyses (opponent-history + map-tier)."""
         ally_names = [c.name for c in self._ally_cards if c.name]
         enemy_names = [c.name for c in self._enemy_cards if c.name]
-        map_name = self.map_edit.text().strip() or None
+        map_name = self.map_edit.currentText().strip() or None
 
         if enemy_names:
             from ..bp import profile_opponents
@@ -947,7 +960,7 @@ class PopupWindow(QWidget):
         return handles
 
     def _run_analysis(self) -> None:
-        map_name = self.map_edit.text().strip() or None
+        map_name = self.map_edit.currentText().strip() or None
         ally_names = [c.name for c in self._ally_cards]
         enemy_names = [c.name for c in self._enemy_cards]
 

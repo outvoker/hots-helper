@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from ..db import Store
 from ..i18n import on_change as on_lang_change, t
+from ..maps import ARAM_MAPS, STORM_LEAGUE_MAPS
 from ..stats import wilson_lower_bound
 
 
@@ -80,8 +81,19 @@ class HeroRankingDialog(QDialog):
             if self.mode_combo.itemData(i) == self._default_mode:
                 self.mode_combo.setCurrentIndex(i)
                 break
-        self.mode_combo.currentIndexChanged.connect(self._reload)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         header.addWidget(self.mode_combo)
+
+        # Map filter — shows the maps relevant to the active mode.
+        # ``None`` data means "all maps". The list is rebuilt whenever
+        # the mode changes so SL maps and ARAM maps don't mix.
+        self.map_label = QLabel()
+        header.addWidget(self.map_label)
+        self.map_combo = QComboBox()
+        self.map_combo.setMinimumWidth(180)
+        self.map_combo.currentIndexChanged.connect(self._reload)
+        header.addWidget(self.map_combo)
+        self._populate_map_combo()
 
         self.min_games_label = QLabel()
         header.addWidget(self.min_games_label)
@@ -155,9 +167,43 @@ class HeroRankingDialog(QDialog):
         self.footer_label.setWordWrap(True)
         root.addWidget(self.footer_label)
 
+    def _populate_map_combo(self) -> None:
+        """Refill the map dropdown for the active mode.
+
+        SL and ARAM run on disjoint map pools, so we don't want to mix
+        them in the dropdown. ``itemData == None`` is the "all maps"
+        sentinel — we always include it as the first entry so the user
+        can opt out of the filter.
+        """
+        prev = self.map_combo.currentData() if self.map_combo.count() else None
+        # Block signals so the rebuild doesn't trigger a useless _reload —
+        # _on_mode_changed will call _reload itself once we're done.
+        self.map_combo.blockSignals(True)
+        self.map_combo.clear()
+        self.map_combo.addItem(t("ui.aram.map_all"), None)
+        mode = self.mode_combo.currentData() if self.mode_combo.count() else None
+        pool = ARAM_MAPS if mode == "ARAM" else STORM_LEAGUE_MAPS
+        for name in pool:
+            self.map_combo.addItem(name, name)
+        # Restore previous selection if still valid; otherwise default to "all".
+        if prev:
+            idx = self.map_combo.findData(prev)
+            if idx >= 0:
+                self.map_combo.setCurrentIndex(idx)
+        self.map_combo.blockSignals(False)
+
+    def _on_mode_changed(self) -> None:
+        # Rebuild the map list (SL ↔ ARAM share no maps), then reload.
+        self._populate_map_combo()
+        self._reload()
+
     def _retranslate(self) -> None:
         self.setWindowTitle(t("ui.aram.window_title"))
         self.mode_label.setText(t("ui.aram.mode"))
+        self.map_label.setText(t("ui.aram.map"))
+        # Refresh the "all maps" sentinel label without losing selection.
+        if self.map_combo.count() and self.map_combo.itemData(0) is None:
+            self.map_combo.setItemText(0, t("ui.aram.map_all"))
         # Mode combo items
         for i, (value, key) in enumerate(_MODES):
             self.mode_combo.setItemText(i, t(key))
@@ -190,9 +236,22 @@ class HeroRankingDialog(QDialog):
     def _reload(self) -> None:
         mode = self.mode_combo.currentData()
         mode_label = self.mode_combo.currentText()
-        self.title.setText(t("ui.aram.title", mode=mode_label))
+        map_name = self.map_combo.currentData()  # None = "all maps"
 
-        rows = self.store.conn.execute("""
+        if map_name:
+            self.title.setText(
+                t("ui.aram.title_with_map", mode=mode_label, map=map_name)
+            )
+        else:
+            self.title.setText(t("ui.aram.title", mode=mode_label))
+
+        params: list = [mode]
+        map_clause = ""
+        if map_name:
+            map_clause = " AND r.map_name = ?"
+            params.append(map_name)
+
+        rows = self.store.conn.execute(f"""
             SELECT pm.hero,
                    COUNT(*) AS games,
                    SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
@@ -206,9 +265,9 @@ class HeroRankingDialog(QDialog):
                    AVG(pm.experience_contribution) AS xp
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE r.mode = ?
+            WHERE r.mode = ?{map_clause}
             GROUP BY pm.hero
-        """, (mode,)).fetchall()
+        """, tuple(params)).fetchall()
 
         min_games = self.min_games_spin.value()
         ranked = []
@@ -238,14 +297,17 @@ class HeroRankingDialog(QDialog):
         elif sort_key == "hero":
             ranked.sort(key=lambda x: x["hero"])
 
-        # DB summary row
+        # DB summary row — same map filter applied so the totals match
+        # the data we actually charted.
         total_games = self.store.conn.execute(
-            "SELECT COUNT(*) FROM replays WHERE mode = ?", (mode,)
+            f"SELECT COUNT(*) FROM replays WHERE mode = ?{map_clause}",
+            tuple(params),
         ).fetchone()[0]
-        total_pm = self.store.conn.execute("""
+        total_pm = self.store.conn.execute(f"""
             SELECT COUNT(*) FROM player_match pm
-            JOIN replays r ON r.id = pm.replay_id WHERE r.mode = ?
-        """, (mode,)).fetchone()[0]
+            JOIN replays r ON r.id = pm.replay_id
+            WHERE r.mode = ?{map_clause}
+        """, tuple(params)).fetchone()[0]
         self.summary.setText(
             t("ui.aram.summary",
               games=total_games, mode=mode_label, pm=total_pm,
