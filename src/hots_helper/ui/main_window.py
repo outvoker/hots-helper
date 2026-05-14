@@ -163,36 +163,55 @@ class MainWindow(QMainWindow):
         # --- Cloud sync section -----------------------------------------------
         self.sync_box = QGroupBox()
         sb_outer = QVBoxLayout(self.sync_box)
-        # Row 1: URL + key + save
+        # Header row: status + sync now + auto + override
         sb_top = QHBoxLayout()
-        self.sync_url_label = QLabel()
-        sb_top.addWidget(self.sync_url_label)
-        self.sync_url_edit = QLineEdit()
-        self.sync_url_edit.setText(self.config.supabase_url)
-        sb_top.addWidget(self.sync_url_edit, 1)
-        self.sync_key_label = QLabel()
-        sb_top.addWidget(self.sync_key_label)
-        self.sync_key_edit = QLineEdit()
-        self.sync_key_edit.setEchoMode(QLineEdit.Password)
-        self.sync_key_edit.setText(self.config.supabase_anon_key)
-        sb_top.addWidget(self.sync_key_edit, 1)
-        self.sync_save_btn = QPushButton()
-        self.sync_save_btn.clicked.connect(self._save_sync_credentials)
-        sb_top.addWidget(self.sync_save_btn)
-        sb_outer.addLayout(sb_top)
-        # Row 2: now button + auto chk + status label
-        sb_bot = QHBoxLayout()
         self.sync_now_btn = QPushButton()
         self.sync_now_btn.clicked.connect(lambda: self._start_sync(force=True))
-        sb_bot.addWidget(self.sync_now_btn)
+        sb_top.addWidget(self.sync_now_btn)
         self.sync_auto_chk = QCheckBox()
         self.sync_auto_chk.setChecked(self.config.sync_auto)
         self.sync_auto_chk.stateChanged.connect(self._toggle_sync_auto)
-        sb_bot.addWidget(self.sync_auto_chk)
-        sb_bot.addStretch(1)
+        sb_top.addWidget(self.sync_auto_chk)
+        sb_top.addStretch(1)
         self.sync_status_label = QLabel()
         self.sync_status_label.setStyleSheet("color:#9ad;")
-        sb_bot.addWidget(self.sync_status_label)
+        sb_top.addWidget(self.sync_status_label)
+        sb_outer.addLayout(sb_top)
+
+        # Override row — only relevant when the user wants to use a custom
+        # Supabase project. Hidden by default if the embedded defaults are
+        # present and the user hasn't overridden them.
+        self.sync_override_widget = QWidget()
+        sb_override = QHBoxLayout(self.sync_override_widget)
+        sb_override.setContentsMargins(0, 0, 0, 0)
+        self.sync_url_label = QLabel()
+        sb_override.addWidget(self.sync_url_label)
+        self.sync_url_edit = QLineEdit()
+        self.sync_url_edit.setText(self.config.supabase_url)
+        sb_override.addWidget(self.sync_url_edit, 1)
+        self.sync_key_label = QLabel()
+        sb_override.addWidget(self.sync_key_label)
+        self.sync_key_edit = QLineEdit()
+        self.sync_key_edit.setEchoMode(QLineEdit.Password)
+        self.sync_key_edit.setText(self.config.supabase_anon_key)
+        sb_override.addWidget(self.sync_key_edit, 1)
+        self.sync_save_btn = QPushButton()
+        self.sync_save_btn.clicked.connect(self._save_sync_credentials)
+        sb_override.addWidget(self.sync_save_btn)
+        sb_outer.addWidget(self.sync_override_widget)
+        # Hidden by default; toggle below.
+        self.sync_override_widget.setVisible(False)
+
+        # Override toggle button — small affordance for the rare user who
+        # wants to point at a private Supabase project.
+        sb_bot = QHBoxLayout()
+        self.sync_override_btn = QPushButton()
+        self.sync_override_btn.setCheckable(True)
+        self.sync_override_btn.toggled.connect(
+            self.sync_override_widget.setVisible
+        )
+        sb_bot.addWidget(self.sync_override_btn)
+        sb_bot.addStretch(1)
         sb_outer.addLayout(sb_bot)
         root.addWidget(self.sync_box)
 
@@ -302,8 +321,21 @@ class MainWindow(QMainWindow):
         self.sync_save_btn.setText(t("ui.main.sync_save"))
         self.sync_now_btn.setText(t("ui.main.sync_now"))
         self.sync_auto_chk.setText(t("ui.main.sync_auto"))
-        if self._cloud_sync is None and hasattr(self, "sync_status_label"):
-            self.sync_status_label.setText(t("ui.main.sync_disabled"))
+        if hasattr(self, "sync_override_btn"):
+            self.sync_override_btn.setText(t("ui.main.sync_override_btn"))
+        if hasattr(self, "sync_status_label"):
+            if self._cloud_sync is None:
+                self.sync_status_label.setText(t("ui.main.sync_disabled"))
+            elif (
+                not self.config.supabase_url
+                and not self.config.supabase_anon_key
+            ):
+                # The user hasn't typed anything; we're using the embedded
+                # defaults. Tell them that with a friendlier label than the
+                # generic "Sync done: pushed 0…" first impression.
+                cur = self.sync_status_label.text()
+                if not cur or cur == t("ui.main.sync_disabled"):
+                    self.sync_status_label.setText(t("ui.main.sync_using_defaults"))
 
         self.tools_box.setTitle(t("ui.main.tools"))
         self.sl_btn.setText(t("ui.main.sl_ranking"))

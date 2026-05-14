@@ -66,7 +66,15 @@ _translations: dict[str, dict[str, str]] = {
     "ui.main.activity": {"zh": "运行日志", "en": "Activity"},
     "ui.main.language": {"zh": "界面语言", "en": "Language"},
 
-    "ui.main.sync_section": {"zh": "云同步", "en": "Cloud sync"},
+    "ui.main.sync_section": {"zh": "云同步（队伍数据共享）", "en": "Cloud sync"},
+    "ui.main.sync_using_defaults": {
+        "zh": "已连接队伍服务器",
+        "en": "Connected to squad server",
+    },
+    "ui.main.sync_override_btn": {
+        "zh": "高级：使用自定义 Supabase 项目",
+        "en": "Advanced: use a custom Supabase project",
+    },
     "ui.main.sync_url": {"zh": "Supabase URL：", "en": "Supabase URL:"},
     "ui.main.sync_key": {"zh": "Supabase 密钥：", "en": "Supabase anon key:"},
     "ui.main.sync_save": {"zh": "保存", "en": "Save"},

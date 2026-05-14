@@ -505,11 +505,16 @@ class CloudSync:
                 ).fetchone()
                 if exists is not None:
                     continue
-                # Build the row: column list mirrors local schema; replay_id
-                # is local-only so we plug it in here.
-                cols = ["replay_id"] + list(_PLAYER_MATCH_COLUMNS)
+                # Build the row for the *local* schema: drop match_key
+                # (the local table has no such column — the cloud uses it
+                # as primary key, but locally we relate via replay_id).
+                local_cols = [c for c in _PLAYER_MATCH_COLUMNS if c != "match_key"]
+                cols = ["replay_id"] + local_cols
                 values = [replay_id] + [
-                    r.get(c, 0 if not isinstance(r.get(c), str) else "") for c in _PLAYER_MATCH_COLUMNS
+                    _strip_nulls(
+                        r.get(c, 0 if not isinstance(r.get(c), str) else "")
+                    )
+                    for c in local_cols
                 ]
                 placeholders = ",".join("?" for _ in cols)
                 self.store.conn.execute(
