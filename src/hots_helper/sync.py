@@ -90,6 +90,15 @@ class SyncResult:
         return self.pulled_replays + self.pulled_players + self.pulled_player_matches
 
 
+def _strip_nulls(value):
+    """Postgres text columns reject U+0000 (NUL bytes). HotS player names
+    occasionally include them as control characters from the in-game
+    rich-text formatter. Strip them defensively."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    return value
+
+
 def _watermark_path() -> Path:
     return data_dir() / "sync_watermark.json"
 
@@ -275,7 +284,10 @@ class CloudSync:
             return 0
         if progress:
             progress(f"pushing {len(rows)} {label}…")
-        records = [dict(zip(columns, row)) for row in rows]
+        records = [
+            {col: _strip_nulls(row[col]) for col in columns}
+            for row in rows
+        ]
         try:
             self._client.upsert(table, records)
         except urllib.error.HTTPError as e:
@@ -294,9 +306,15 @@ class CloudSync:
         # player_match rows don't carry a timestamp themselves; we use the
         # parent replay's played_at via JOIN. Send all rows whose replay
         # is newer than the last-pushed timestamp.
+        # Local schema joins via ``replay_id`` (the auto-increment column on
+        # replays), not ``match_key``. Cloud schema is keyed on match_key
+        # because there's no global replay_id across squad members. Bridge
+        # them by joining on replays.id and substituting r.match_key in
+        # output.
         try:
-            rows = self.store.conn.execute(f"""
-                SELECT pm.match_key, pm.slot, pm.toon_handle, pm.display_name,
+            rows = self.store.conn.execute("""
+                SELECT r.match_key AS match_key, pm.slot, pm.toon_handle,
+                       pm.display_name,
                        pm.hero, pm.hero_id, pm.skin, pm.banner, pm.team, pm.result,
                        pm.kills, pm.deaths, pm.assists, pm.takedowns, pm.solo_kills,
                        pm.level,
@@ -319,8 +337,9 @@ class CloudSync:
                        pm.on_fire_time, pm.talents, pm.awards, pm.hero_mastery_tiers,
                        r.played_at AS replay_played_at
                 FROM player_match pm
-                JOIN replays r ON r.match_key = pm.match_key
+                JOIN replays r ON r.id = pm.replay_id
                 WHERE r.played_at > ?
+                  AND r.match_key != ''
                 ORDER BY r.played_at
             """, (since,)).fetchall()
         except Exception as e:
@@ -333,7 +352,7 @@ class CloudSync:
         records: list[dict[str, Any]] = []
         latest_replay_at = since
         for row in rows:
-            d = dict(zip(_PLAYER_MATCH_COLUMNS, row[:len(_PLAYER_MATCH_COLUMNS)]))
+            d = {col: _strip_nulls(row[col]) for col in _PLAYER_MATCH_COLUMNS}
             records.append(d)
             if row["replay_played_at"] > latest_replay_at:
                 latest_replay_at = row["replay_played_at"]

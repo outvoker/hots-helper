@@ -16,8 +16,8 @@ from __future__ import annotations
 
 # The squad's shared Supabase project. Both must be set for sync to be
 # automatically enabled; leave them blank to require manual setup.
-DEFAULT_SUPABASE_URL = ""              # e.g. "https://abcdxyz123.supabase.co"
-DEFAULT_SUPABASE_ANON_KEY = ""         # e.g. "sb_publishable_xxxxxxxxxxxxx"
+DEFAULT_SUPABASE_URL = "https://terdwrtbewqtuttbzhch.supabase.co"
+DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_xE_eQzx-mIBITXy5ji8Ybw_SQdsMpO-"
 
 
 def has_defaults() -> bool:
