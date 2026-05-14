@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+HotS Helper app icon.
+A pointed-top hex (the recurring shape on every HotS draft slot) with
+a thin inner hex outline and a stylised "HS" monogram, lit by the
+black/gold accent palette used everywhere in the UI.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="bg" cx="0.35" cy="0.30" r="0.85">
+      <stop offset="0"   stop-color="#23222b"/>
+      <stop offset="0.6" stop-color="#0d0d12"/>
+      <stop offset="1"   stop-color="#000000"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#fff1bc"/>
+      <stop offset="0.45" stop-color="#f4c453"/>
+      <stop offset="1"    stop-color="#a87623"/>
+    </linearGradient>
+    <linearGradient id="goldStroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fde9a1"/>
+      <stop offset="1" stop-color="#7d5618"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Round-rect background like a Windows app tile -->
+  <rect x="8" y="8" width="240" height="240" rx="40" fill="url(#bg)"
+        stroke="#3a3445" stroke-width="2"/>
+
+  <!-- Outer hex (pointed-top) with gold stroke -->
+  <polygon
+    points="128,32 220,84 220,188 128,240 36,188 36,84"
+    fill="none"
+    stroke="url(#goldStroke)"
+    stroke-width="6"
+    stroke-linejoin="round"
+    filter="url(#glow)"/>
+
+  <!-- Inner hex shading -->
+  <polygon
+    points="128,52 202,94 202,178 128,220 54,178 54,94"
+    fill="#1a1820"
+    stroke="#3a3445"
+    stroke-width="1.5"/>
+
+  <!-- "HS" monogram, gold -->
+  <g fill="url(#gold)" font-family="Georgia, 'Times New Roman', serif"
+     font-weight="700" font-style="italic" text-anchor="middle">
+    <text x="128" y="170" font-size="118"
+          letter-spacing="-6" filter="url(#glow)">HS</text>
+  </g>
+
+  <!-- Tiny corner gleam -->
+  <circle cx="78" cy="84" r="2.5" fill="#fff1bc" opacity="0.9"/>
+  <circle cx="180" cy="200" r="1.8" fill="#fff1bc" opacity="0.7"/>
+</svg>

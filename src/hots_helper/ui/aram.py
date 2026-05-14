@@ -54,7 +54,7 @@ class HeroRankingDialog(QDialog):
         super().__init__(parent)
         self.store = store
         self.setMinimumSize(1180, 720)
-        self.setStyleSheet("background:#161616; color:#eee;")
+        # Inherit the global black-gold theme — no per-dialog override here.
         self._default_mode = default_mode
         self._build_ui()
         self._retranslate()
@@ -67,7 +67,7 @@ class HeroRankingDialog(QDialog):
         header = QHBoxLayout()
         self.title = QLabel()
         self.title.setFont(QFont("", 14, QFont.Bold))
-        self.title.setStyleSheet("color:#fc6;")
+        self.title.setProperty("role", "title")  # picks up gold from theme QSS
         header.addWidget(self.title)
         header.addStretch(1)
 
@@ -115,23 +115,17 @@ class HeroRankingDialog(QDialog):
         self.search_edit.returnPressed.connect(self._jump_to_match)
         search_row.addWidget(self.search_edit, 1)
         self.match_label = QLabel("")
-        self.match_label.setStyleSheet("color:#888;")
+        self.match_label.setProperty("role", "subtitle")
         search_row.addWidget(self.match_label)
         root.addLayout(search_row)
 
         self.summary = QLabel("")
-        self.summary.setStyleSheet("color:#9ad; padding: 4px 0;")
+        self.summary.setStyleSheet("padding: 4px 0; color: #b8c7d9;")
         root.addWidget(self.summary)
 
-        # Stats table
+        # Stats table — global theme handles the look; we only set
+        # behaviour here.
         self.table = QTableWidget()
-        self.table.setStyleSheet(
-            "QTableWidget { background:#1d1d1d; color:#eee; gridline-color:#333; }"
-            "QHeaderView::section { background:#272727; color:#fc6; "
-            "                       padding:4px; border:1px solid #333; "
-            "                       font-weight:600; }"
-            "QTableWidget::item:selected { background:#2a3540; color:#eee; }"
-        )
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)

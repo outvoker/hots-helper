@@ -55,6 +55,18 @@ from ..db import Store
 from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
 from ..talent_names import talent_label
+from .theme import (
+    BG_DEEP,
+    BG_ELEVATED,
+    BG_HOVER,
+    BG_INPUT,
+    GOLD,
+    GOLD_BRIGHT,
+    GOLD_DIM,
+    LINE,
+    TEXT,
+    TEXT_DIM,
+)
 
 
 # --- formatting helpers -------------------------------------------------------
@@ -158,14 +170,18 @@ class _PlayerCard(QFrame):
         super().__init__()
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(
-            "QFrame { background: rgba(28,28,28,230); color: #eee; border-radius: 8px; }"
-            "QLineEdit { background: #1b1b1b; color: #eee; border: 1px solid #444; "
-            "            padding: 3px 6px; font-size: 11pt; }"
-            "QLineEdit:focus { border: 1px solid #8cf; }"
+            f"QFrame {{ background: {BG_DEEP}; color: {TEXT};"
+            f"          border: 1px solid {LINE}; border-radius: 8px; }}"
+            f"QLineEdit {{ background: {BG_INPUT}; color: {TEXT};"
+            f"            border: 1px solid {LINE}; padding: 3px 6px; font-size: 11pt; }}"
+            f"QLineEdit:focus {{ border: 1px solid {accent}; }}"
             f"QLabel#title {{ color: {accent}; font-weight: 600; }}"
-            "QPushButton { background: #224; color: #def; border: 1px solid #446; "
-            "             padding: 1px 8px; border-radius: 4px; font-size: 9pt; }"
-            "QPushButton:hover { background: #336; }"
+            f"QPushButton {{ background: {BG_INPUT}; color: {TEXT};"
+            f"             border: 1px solid {LINE}; padding: 1px 8px;"
+            f"             border-radius: 4px; font-size: 9pt; }}"
+            f"QPushButton:hover {{ background: {BG_ELEVATED};"
+            f"                    border-color: {GOLD_DIM};"
+            f"                    color: {GOLD_BRIGHT}; }}"
         )
         self._expanded = False
         self._summaries: list[PlayerSummary] = []
@@ -313,9 +329,10 @@ class _BanList(QFrame):
         super().__init__()
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(
-            "QFrame { background: rgba(40,18,18,235); color: #fdd; "
-            "         border-radius: 8px; border: 1px solid #633; }"
-            "QLabel { color: #fdd; }"
+            f"QFrame {{ background: {BG_ELEVATED}; color: #fbd;"
+            f"         border-radius: 8px; border: 1px solid #6a3030;"
+            f"         border-left: 3px solid #b34848; }}"
+            "QLabel { color: #fbd; }"
         )
         v = QVBoxLayout(self)
         v.setContentsMargins(10, 8, 10, 8)
@@ -405,12 +422,18 @@ class _PickList(QFrame):
         super().__init__()
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(
-            "QFrame { background: rgba(18,34,22,235); color: #dfd; "
-            "         border-radius: 8px; border: 1px solid #363; }"
-            "QLabel { color: #dfd; }"
-            "QPushButton { background: #224; color: #def; border: 1px solid #446; "
-            "             padding: 2px 8px; border-radius: 4px; }"
-            "QPushButton:checked { background: #445; }"
+            f"QFrame {{ background: {BG_ELEVATED}; color: #cfd9c4;"
+            f"         border-radius: 8px; border: 1px solid {GOLD_DIM};"
+            f"         border-left: 3px solid {GOLD}; }}"
+            "QLabel { color: #cfd9c4; }"
+            f"QPushButton {{ background: {BG_INPUT}; color: {TEXT};"
+            f"             border: 1px solid {LINE}; padding: 2px 8px;"
+            f"             border-radius: 4px; }}"
+            f"QPushButton:hover {{ border-color: {GOLD_DIM};"
+            f"                    color: {GOLD_BRIGHT}; }}"
+            f"QPushButton:checked {{ background: {BG_HOVER};"
+            f"                      border-color: {GOLD};"
+            f"                      color: {GOLD_BRIGHT}; }}"
         )
         v = QVBoxLayout(self)
         v.setContentsMargins(10, 8, 10, 8)
@@ -519,7 +542,18 @@ class PopupWindow(QWidget):
         # Qt::NoFocus on the top-level prevents Windows from waking
         # exclusive-fullscreen apps and minimising them.
         self.setFocusPolicy(Qt.NoFocus)
-        self.setStyleSheet("background: rgba(20,20,20,240); color: #eee;")
+        # Frameless popup: paint our own gold-edged border so the floating
+        # window still reads as a deliberate object on top of the game.
+        # ``#popupRoot`` is the object name we set below; scoping the rule
+        # this way keeps it from cascading into every child QWidget.
+        self.setObjectName("popupRoot")
+        self.setStyleSheet(
+            f"QWidget#popupRoot {{"
+            f" background-color: {BG_DEEP};"
+            f" border: 1px solid {GOLD_DIM};"
+            f" border-radius: 10px;"
+            f"}}"
+        )
         self._drag_pos = None
         self._screenshot_path = None
         self._current_drafter = ""
@@ -538,7 +572,10 @@ class PopupWindow(QWidget):
         # --- header ---------------------------------------------------------
         header = QHBoxLayout()
         self.title = QLabel()
-        self.title.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        self.title.setStyleSheet(
+            f"font-size: 14pt; font-weight: 600; color: {GOLD};"
+            f" letter-spacing: 0.5px; padding: 2px 4px;"
+        )
         header.addWidget(self.title)
         header.addStretch(1)
         self.map_label = QLabel()
@@ -559,8 +596,11 @@ class PopupWindow(QWidget):
         self.minimize_btn.setToolTip(t("ui.popup.minimize_tip"))
         self.minimize_btn.clicked.connect(self._collapse_to_pill)
         self.minimize_btn.setStyleSheet(
-            "background:#225; color:#eee; border-radius:14px; "
-            "font-weight:bold; font-size: 14pt;"
+            f"QPushButton {{ background:{BG_INPUT}; color:{TEXT};"
+            f" border:1px solid {LINE}; border-radius:14px;"
+            f" font-weight:bold; font-size: 14pt; padding:0; }}"
+            f"QPushButton:hover {{ color:{GOLD_BRIGHT};"
+            f" border-color:{GOLD_DIM}; }}"
         )
         header.addWidget(self.minimize_btn)
 
@@ -568,7 +608,11 @@ class PopupWindow(QWidget):
         close_btn.setFixedSize(28, 28)
         close_btn.clicked.connect(self.hide)
         close_btn.setStyleSheet(
-            "background:#552; color:#eee; border-radius:14px; font-weight:bold;"
+            f"QPushButton {{ background:{BG_INPUT}; color:{TEXT};"
+            f" border:1px solid {LINE}; border-radius:14px;"
+            f" font-weight:bold; padding:0; }}"
+            f"QPushButton:hover {{ color:#e08585;"
+            f" border-color:#e08585; background:{BG_DEEP}; }}"
         )
         header.addWidget(close_btn)
         root.addLayout(header)
@@ -635,8 +679,8 @@ class PopupWindow(QWidget):
     def _make_column(self, parent_layout: QHBoxLayout, title: str, accent: str) -> list[_PlayerCard]:
         col = QFrame()
         col.setStyleSheet(
-            "QFrame { background: rgba(24,24,24,180); border-radius: 6px; "
-            f"border: 1px solid {accent}; }}"
+            f"QFrame {{ background: {BG_ELEVATED};"
+            f" border: 1px solid {accent}; border-radius: 6px; }}"
         )
         v = QVBoxLayout(col)
         v.setContentsMargins(8, 6, 8, 8)
@@ -773,7 +817,8 @@ class PopupWindow(QWidget):
         ):
             btn.hide()
         self.title.setStyleSheet(
-            "font-size: 9pt; font-weight: 600; color:#eee; padding:0 6px;"
+            f"font-size: 9pt; font-weight: 600; color:{GOLD};"
+            f" padding:0 6px; letter-spacing: 0.5px;"
         )
 
         target = self._pill_target_geometry()
@@ -782,7 +827,11 @@ class PopupWindow(QWidget):
         self._geom_anim.setEndValue(target)
         self._geom_anim.start()
         self.setStyleSheet(
-            "background: rgba(20,20,28,235); color:#eee; border-radius:14px;"
+            f"QWidget#popupRoot {{"
+            f" background-color: {BG_ELEVATED};"
+            f" border: 1px solid {GOLD};"
+            f" border-radius: 16px;"
+            f"}}"
         )
 
     def _restore_from_pill(self) -> None:
@@ -804,8 +853,17 @@ class PopupWindow(QWidget):
             self.minimize_btn,
         ):
             btn.show()
-        self.title.setStyleSheet("font-size: 14pt; font-weight: 600;")
-        self.setStyleSheet("background: rgba(20,20,20,240); color: #eee;")
+        self.title.setStyleSheet(
+            f"font-size: 14pt; font-weight: 600; color: {GOLD};"
+            f" letter-spacing: 0.5px; padding: 2px 4px;"
+        )
+        self.setStyleSheet(
+            f"QWidget#popupRoot {{"
+            f" background-color: {BG_DEEP};"
+            f" border: 1px solid {GOLD_DIM};"
+            f" border-radius: 10px;"
+            f"}}"
+        )
 
     # --- analysis -------------------------------------------------------------
 

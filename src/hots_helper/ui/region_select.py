@@ -64,8 +64,9 @@ class RegionSelectorDialog(QDialog):
 
         self._hint = QLabel(t("ui.popup.region.hint"), self)
         self._hint.setStyleSheet(
-            "background: rgba(0,0,0,180); color: #fc6; padding: 6px 12px; "
-            "border-radius: 6px; font-weight: 600;"
+            "background: rgba(13,13,18,210); color: #f4c453;"
+            " padding: 6px 12px; border: 1px solid #7d5618;"
+            " border-radius: 6px; font-weight: 600;"
         )
         self._hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._hint.adjustSize()

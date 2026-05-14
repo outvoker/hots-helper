@@ -11,7 +11,9 @@ from PySide6.QtWidgets import QApplication
 from ..config import Config, default_db_path as user_default_db_path
 from ..db import Store
 from ..i18n import set_language, t
+from .assets import app_icon
 from .main_window import MainWindow
+from .theme import apply_app_theme
 
 
 def _setup_logging() -> None:
@@ -51,6 +53,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("HotS Helper")
     app.setQuitOnLastWindowClosed(True)
+    app.setWindowIcon(app_icon())
+    apply_app_theme(app)
 
     config = Config.load()
     set_language(getattr(config, "language", "zh") or "zh")
