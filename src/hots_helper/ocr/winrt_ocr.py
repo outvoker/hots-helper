@@ -1,66 +1,103 @@
 """Windows OCR backend using ``Windows.Media.Ocr``.
 
-The Windows 10/11 system OCR engine — same one Snip & Sketch uses. Handles
-English + the CJK languages whose packs are installed (Settings → Time &
-Language → Add a language → 中文(简体)/日本語/한국어 → Optional features →
-"Basic typing" includes the OCR data).
+Why this is annoying: ``Windows.Media.Ocr`` is an async Windows Runtime API.
+Running it from a Python thread requires:
 
-We optimize for fast first response:
+1. The thread to be inside a COM apartment (``CoInitializeEx``). Without
+   this, every winrt call hangs forever — no error, no return.
+2. An asyncio event loop to drive the IAsyncOperation completions. The
+   default ``ProactorEventLoop`` on Windows doesn't work well from a
+   non-main thread; we use a plain ``SelectorEventLoop`` instead.
+3. Hard timeouts on each await, because hangs do happen and we don't
+   want the UI worker to block the user forever.
 
-- Read the image straight from disk into an in-memory ``InMemoryRandomAccessStream``
-  (StorageFile.get_file_from_path_async has been observed to hang on Windows
-  when called from a non-UI thread).
-- Initialize a COM apartment ourselves before any winrt call. Without this,
-  ``Windows.Media.Ocr`` deadlocks instead of erroring.
-- Try one engine first (the user's CN preference). Only fan out to extra
-  languages if the first pass returns < 3 blocks — multi-language is
-  expensive and the second pass is rarely needed when the user has the
-  right pack installed.
+A progress callback lets the worker thread stream stage messages to the UI
+log even while the OCR is in flight.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 from pathlib import Path
+from typing import Callable, Optional
 
 from . import OcrBlock
 
 logger = logging.getLogger(__name__)
 
+ProgressCallback = Optional[Callable[[str], None]]
 
-# --- Top-level COM + asyncio runner ----------------------------------------
+# Hard caps so a hung winrt call cannot freeze the worker thread forever.
+_BITMAP_LOAD_TIMEOUT = 5.0
+_PER_ENGINE_TIMEOUT = 8.0
+_OVERALL_TIMEOUT = 30.0
 
 
-def _run(coro):
-    """Run ``coro`` to completion. Initializes a COM apartment first.
+def _emit(progress: ProgressCallback, msg: str) -> None:
+    """Send ``msg`` to the UI log AND stderr / logger. Cheap belt-and-braces."""
+    logger.info(msg)
+    print(f"[winrt_ocr] {msg}", file=sys.stderr, flush=True)
+    if progress is not None:
+        try:
+            progress(msg)
+        except Exception:
+            pass
 
-    The whole point: ``Windows.Media.Ocr`` is COM-based. The thread that
-    calls it must already be inside a COM apartment, otherwise the call
-    blocks forever (no error, no return). We use STA because winrt is built
-    on apartment-threaded COM.
-    """
-    initialized = False
+
+# --- COM bootstrap ---------------------------------------------------------
+
+
+def _init_com(progress: ProgressCallback) -> bool:
+    """Initialize an STA on the current thread. Required for winrt."""
+    try:
+        import pythoncom  # provided by pywin32
+    except ImportError:
+        _emit(progress, "WARN pywin32 not installed — winrt may hang. "
+                        "Run `uv sync` to pull pywin32.")
+        return False
+    try:
+        pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+        _emit(progress, "COM apartment initialized (STA)")
+        return True
+    except Exception as e:
+        _emit(progress, f"WARN CoInitializeEx failed: {e}")
+        return False
+
+
+def _uninit_com() -> None:
     try:
         import pythoncom
+        pythoncom.CoUninitialize()
+    except Exception:
+        pass
 
-        try:
-            pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
-            initialized = True
-            logger.debug("CoInitializeEx STA succeeded")
-        except Exception as e:
-            logger.warning("CoInitializeEx failed: %s — continuing anyway", e)
-    except ImportError:
-        logger.debug("pythoncom not available; skipping COM init")
 
+# --- Top-level runner ------------------------------------------------------
+
+
+def _run_with_timeout(coro, progress: ProgressCallback):
+    """Run ``coro`` on a Windows-friendly event loop with an overall timeout."""
+    loop = None
     try:
-        return asyncio.new_event_loop().run_until_complete(coro)
+        # SelectorEventLoop is the safest choice on a Qt worker thread.
+        if sys.platform == "win32":
+            loop = asyncio.SelectorEventLoop()
+        else:
+            loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(
+            asyncio.wait_for(coro, timeout=_OVERALL_TIMEOUT)
+        )
+    except asyncio.TimeoutError:
+        _emit(progress, f"OCR overall timeout ({_OVERALL_TIMEOUT}s) — giving up")
+        return []
     finally:
-        if initialized:
+        if loop is not None:
             try:
-                import pythoncom
-                pythoncom.CoUninitialize()
+                loop.close()
             except Exception:
                 pass
 
@@ -68,13 +105,12 @@ def _run(coro):
 # --- Image loading ---------------------------------------------------------
 
 
-async def _load_bitmap(path: Path):
-    """Read the image as a SoftwareBitmap.
+async def _load_bitmap(path: Path, progress: ProgressCallback):
+    """Read the file as a SoftwareBitmap.
 
-    We avoid StorageFile.get_file_from_path_async because it requires the
-    UI thread / capabilities on packaged apps and has been observed to hang
-    on plain Win32 processes. Instead we feed the bytes directly to a
-    DataWriter -> InMemoryRandomAccessStream.
+    We avoid ``StorageFile.get_file_from_path_async`` because that API has
+    been observed to hang in plain Win32 processes — it expects packaged-app
+    capabilities. Using an in-memory stream instead.
     """
     from winrt.windows.graphics.imaging import BitmapDecoder
     from winrt.windows.storage.streams import (
@@ -82,28 +118,37 @@ async def _load_bitmap(path: Path):
         InMemoryRandomAccessStream,
     )
 
+    _emit(progress, f"reading {path.stat().st_size:,} bytes from disk")
     raw = path.read_bytes()
+
+    _emit(progress, "writing into InMemoryRandomAccessStream…")
     stream = InMemoryRandomAccessStream()
     writer = DataWriter(stream)
     try:
         writer.write_bytes(raw)
-        await writer.store_async()
+        await asyncio.wait_for(writer.store_async(), timeout=_BITMAP_LOAD_TIMEOUT)
     finally:
-        # Detach so the underlying stream stays valid for the decoder.
         try:
             writer.detach_stream()
         except Exception:
             pass
     stream.seek(0)
-    decoder = await BitmapDecoder.create_async(stream)
-    return await decoder.get_software_bitmap_async()
+
+    _emit(progress, "creating BitmapDecoder…")
+    decoder = await asyncio.wait_for(
+        BitmapDecoder.create_async(stream),
+        timeout=_BITMAP_LOAD_TIMEOUT,
+    )
+    _emit(progress, "decoding to SoftwareBitmap…")
+    return await asyncio.wait_for(
+        decoder.get_software_bitmap_async(),
+        timeout=_BITMAP_LOAD_TIMEOUT,
+    )
 
 
 # --- Recognition -----------------------------------------------------------
 
 
-# Order matters: Chinese first since this is the primary use-case. en-US is
-# a backstop because it's installed by default on every Windows machine.
 _PREFERRED_LANGS = (
     "zh-Hans-CN", "zh-Hans", "zh-CN",
     "ja-JP", "ja",
@@ -116,14 +161,12 @@ def _create_engine(tag: str):
     from winrt.windows.globalization import Language
     from winrt.windows.media.ocr import OcrEngine
     try:
-        lang = Language(tag)
-        return OcrEngine.try_create_from_language(lang)
+        return OcrEngine.try_create_from_language(Language(tag))
     except Exception:
         return None
 
 
-def _enum_engines():
-    """Return list of ``(tag, engine)`` for every available preferred language."""
+def _enum_engines(progress: ProgressCallback):
     from winrt.windows.media.ocr import OcrEngine
     out = []
     seen = set()
@@ -141,16 +184,35 @@ def _enum_engines():
                 out.append(("user-profile", eng))
         except Exception:
             pass
+    _emit(progress, f"available OCR engines: {[tag for tag, _ in out]}")
+    if not out:
+        _emit(progress, "ERROR no Windows OCR engine available — install at "
+                        "least the English language pack")
     return out
 
 
-async def _recognize_with_engine(engine, bitmap):
-    blocks = []
+async def _recognize_with_engine(engine, bitmap, tag: str,
+                                 progress: ProgressCallback):
+    blocks: list[OcrBlock] = []
     img_w = float(bitmap.pixel_width) or 1.0
     img_h = float(bitmap.pixel_height) or 1.0
-    result = await engine.recognize_async(bitmap)
-    if result is None:
+    t = time.monotonic()
+    try:
+        result = await asyncio.wait_for(
+            engine.recognize_async(bitmap),
+            timeout=_PER_ENGINE_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        _emit(progress, f"engine {tag!r} TIMEOUT after {_PER_ENGINE_TIMEOUT}s")
         return blocks, img_w, img_h
+    except Exception as e:
+        _emit(progress, f"engine {tag!r} crashed: {type(e).__name__}: {e}")
+        return blocks, img_w, img_h
+
+    if result is None:
+        _emit(progress, f"engine {tag!r} returned None")
+        return blocks, img_w, img_h
+
     for line in result.lines:
         words = list(line.words)
         if not words:
@@ -174,45 +236,36 @@ async def _recognize_with_engine(engine, bitmap):
                 confidence=1.0,
             )
         )
+    _emit(progress,
+          f"engine {tag!r}: {len(blocks)} blocks in "
+          f"{time.monotonic() - t:.2f}s")
     return blocks, img_w, img_h
 
 
-async def _recognize_async(path: Path) -> list[OcrBlock]:
-    t0 = time.monotonic()
-    logger.info("loading bitmap from %s", path)
-    bitmap = await _load_bitmap(path)
-    logger.info("bitmap loaded in %.2fs (%dx%d)",
-                time.monotonic() - t0, bitmap.pixel_width, bitmap.pixel_height)
+async def _recognize_async(path: Path, progress: ProgressCallback) -> list[OcrBlock]:
+    bitmap = await _load_bitmap(path, progress)
+    _emit(progress,
+          f"bitmap ready: {bitmap.pixel_width}x{bitmap.pixel_height}")
 
-    engines = _enum_engines()
-    logger.info("available OCR engines: %s", [tag for tag, _ in engines])
+    engines = _enum_engines(progress)
     if not engines:
-        logger.error("no Windows OCR engine available — install language packs")
         return []
 
-    # Fast path: try the first engine. If it returns enough blocks, stop.
     primary_tag, primary_engine = engines[0]
-    t1 = time.monotonic()
-    primary_blocks, _w, _h = await _recognize_with_engine(primary_engine, bitmap)
-    logger.info("primary engine %r: %d blocks in %.2fs",
-                primary_tag, len(primary_blocks), time.monotonic() - t1)
+    primary_blocks, _w, _h = await _recognize_with_engine(
+        primary_engine, bitmap, primary_tag, progress
+    )
 
+    # Stop after primary if we got enough blocks or there is no second engine.
     if len(primary_blocks) >= 3 or len(engines) == 1:
         return primary_blocks
 
-    # Fan out to remaining engines for extra coverage (CJK names that the
-    # primary engine garbled). Cap to 3 extra engines so we don't burn
-    # 10 seconds on a slow box.
     all_blocks = list(primary_blocks)
     for tag, engine in engines[1:4]:
-        t2 = time.monotonic()
-        try:
-            extra_blocks, _w, _h = await _recognize_with_engine(engine, bitmap)
-            logger.info("engine %r: %d blocks in %.2fs",
-                        tag, len(extra_blocks), time.monotonic() - t2)
-            all_blocks.extend(extra_blocks)
-        except Exception as e:
-            logger.warning("engine %r failed: %s", tag, e)
+        extra_blocks, _w, _h = await _recognize_with_engine(
+            engine, bitmap, tag, progress
+        )
+        all_blocks.extend(extra_blocks)
     return _merge_overlapping(all_blocks)
 
 
@@ -220,11 +273,6 @@ async def _recognize_async(path: Path) -> list[OcrBlock]:
 
 
 def _merge_overlapping(blocks: list[OcrBlock]) -> list[OcrBlock]:
-    """Dedup blocks from multiple OCR passes covering the same region.
-
-    Overlap > 70% → keep the candidate with more CJK characters (the CJK
-    engine's read of a Chinese name beats the en-US engine's gibberish).
-    """
     if len(blocks) < 2:
         return blocks
     out: list[OcrBlock] = []
@@ -280,9 +328,27 @@ def _is_cjk_char(ch: str) -> bool:
     )
 
 
-def recognize(image_path: Path) -> list[OcrBlock]:
+# --- Public entry point ----------------------------------------------------
+
+
+def recognize(image_path: Path,
+              progress: ProgressCallback = None) -> list[OcrBlock]:
+    """Run Windows OCR on ``image_path``.
+
+    ``progress`` is an optional callback (called from the same thread) that
+    receives stage messages as plain strings. Hook it up to your UI's log
+    so the user can see exactly where the pipeline is spending time.
+    """
+    com_initialized = _init_com(progress)
     try:
-        return _run(_recognize_async(image_path))
-    except Exception:
+        return _run_with_timeout(
+            _recognize_async(image_path, progress),
+            progress,
+        )
+    except Exception as e:
+        _emit(progress, f"FATAL OCR pipeline crash: {type(e).__name__}: {e}")
         logger.exception("Windows OCR pipeline crashed")
         return []
+    finally:
+        if com_initialized:
+            _uninit_com()

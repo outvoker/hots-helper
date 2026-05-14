@@ -5,6 +5,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Optional
+
+ProgressCallback = Optional[Callable[[str], None]]
 
 
 @dataclass
@@ -15,23 +18,25 @@ class OcrBlock:
     confidence: float
 
 
-def recognize(image_path: Path) -> list[OcrBlock]:
+def recognize(image_path: Path,
+              progress: ProgressCallback = None) -> list[OcrBlock]:
     """Run the best available OCR backend on ``image_path``.
 
-    Returns a list of text blocks with normalized positions. Empty list on
-    failure or when no backend is available.
+    ``progress`` is an optional callback that receives stage strings as the
+    pipeline runs (mainly useful on Windows where each step can take a
+    couple seconds). The callback is invoked from the same thread as
+    ``recognize`` itself.
     """
     if sys.platform == "darwin":
         try:
             from .vision_macos import recognize as _r
-            return _r(image_path)
+            return _r(image_path)  # macOS is fast enough that progress isn't needed
         except Exception:
             return []
     if sys.platform == "win32":
         try:
             from .winrt_ocr import recognize as _r
-            return _r(image_path)
+            return _r(image_path, progress=progress)
         except Exception:
             return []
-    # Fall back: no OCR.
     return []

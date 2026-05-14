@@ -211,9 +211,18 @@ def _pick_drafter(blocks: list[OcrBlock]) -> str:
     return candidates[0].text.strip()
 
 
-def parse_screenshot(image_path: Path) -> ParsedScreenshot:
-    """Full screenshot → (map, ally_names, enemy_names, drafter) + confidences."""
-    blocks = recognize(image_path)
+def parse_screenshot(
+    image_path: Path,
+    *,
+    blocks: list[OcrBlock] | None = None,
+) -> ParsedScreenshot:
+    """Full screenshot → (map, ally_names, enemy_names, drafter) + confidences.
+
+    If ``blocks`` is provided, skip OCR and reuse them — this avoids running
+    Windows.Media.Ocr twice when the worker has already done it.
+    """
+    if blocks is None:
+        blocks = recognize(image_path)
     if not blocks:
         return ParsedScreenshot(
             map_name="", ally_names=[""] * 5, enemy_names=[""] * 5,

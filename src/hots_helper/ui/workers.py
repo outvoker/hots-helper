@@ -182,7 +182,15 @@ class HotkeyWorker(QObject):
             blocks = []
             try:
                 from ..ocr import recognize
-                blocks = recognize(screenshot_path)
+
+                # Stream low-level OCR stage messages to the UI as they
+                # happen. Without this the user just sees "Running OCR..."
+                # and waits in the dark when winrt is slow.
+                def _ocr_progress(msg: str) -> None:
+                    self.progress.emit(f"      {msg}")
+                    log_lines.append(f"      {msg}")
+
+                blocks = recognize(screenshot_path, progress=_ocr_progress)
                 dt = time.monotonic() - t1
                 log_lines.append(
                     f"[2/3] OCR returned {len(blocks)} text block(s) in {dt:.1f}s"
@@ -201,7 +209,7 @@ class HotkeyWorker(QObject):
                 self.progress.emit("[3/3] Parsing names from OCR blocks…")
                 try:
                     from ..vision import parse_screenshot
-                    parsed = parse_screenshot(screenshot_path)
+                    parsed = parse_screenshot(screenshot_path, blocks=blocks)
                     map_name = parsed.map_name
                     allies = list(parsed.ally_names)
                     enemies = list(parsed.enemy_names)
