@@ -324,6 +324,7 @@ class MainWindow(QMainWindow):
         worker = HotkeyWorker()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+        worker.progress.connect(self._log)
         worker.finished.connect(self._on_hotkey_finished)
         worker.finished.connect(thread.quit)
         thread.finished.connect(self._cleanup_hotkey_thread)

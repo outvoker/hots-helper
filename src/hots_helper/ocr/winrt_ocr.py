@@ -1,168 +1,229 @@
 """Windows OCR backend using ``Windows.Media.Ocr``.
 
-This is the system OCR shipped with Windows 10/11 — same engine that powers
-Snip & Sketch text recognition. It handles English + Chinese well as long as
-the matching language pack is installed (Settings → Time & Language → Add a
-language → 中文(简体, 中国) → Optional features → ensure "Basic typing"
-includes the OCR pack).
+The Windows 10/11 system OCR engine — same one Snip & Sketch uses. Handles
+English + the CJK languages whose packs are installed (Settings → Time &
+Language → Add a language → 中文(简体)/日本語/한국어 → Optional features →
+"Basic typing" includes the OCR data).
 
-Requires the ``winrt`` Python wrapper. Installed by ``pip install winrt-runtime
-winrt-Windows.Media.Ocr winrt-Windows.Graphics.Imaging
-winrt-Windows.Storage.Streams winrt-Windows.Globalization``. The build is
-scoped to ``sys_platform == 'win32'`` in ``pyproject.toml`` so macOS/Linux
-checkouts skip these.
+We optimize for fast first response:
+
+- Read the image straight from disk into an in-memory ``InMemoryRandomAccessStream``
+  (StorageFile.get_file_from_path_async has been observed to hang on Windows
+  when called from a non-UI thread).
+- Initialize a COM apartment ourselves before any winrt call. Without this,
+  ``Windows.Media.Ocr`` deadlocks instead of erroring.
+- Try one engine first (the user's CN preference). Only fan out to extra
+  languages if the first pass returns < 3 blocks — multi-language is
+  expensive and the second pass is rarely needed when the user has the
+  right pack installed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from pathlib import Path
 
 from . import OcrBlock
 
+logger = logging.getLogger(__name__)
+
+
+# --- Top-level COM + asyncio runner ----------------------------------------
+
 
 def _run(coro):
-    """Run ``coro`` to completion regardless of the current event loop state.
+    """Run ``coro`` to completion. Initializes a COM apartment first.
 
-    Each call also initializes a COM apartment for the calling thread. Without
-    this, ``Windows.Media.Ocr`` calls hang indefinitely on threads other than
-    the one that first imported pythonnet/winrt — which on Qt apps means a
-    deadlock the first time the user invokes OCR from anywhere except the
-    initializer. We use STA because winrt expects an apartment-threaded host;
-    failures are non-fatal (e.g. the thread might already have an apartment).
+    The whole point: ``Windows.Media.Ocr`` is COM-based. The thread that
+    calls it must already be inside a COM apartment, otherwise the call
+    blocks forever (no error, no return). We use STA because winrt is built
+    on apartment-threaded COM.
     """
+    initialized = False
     try:
-        import pythoncom  # provided by pywin32 on Windows
+        import pythoncom
 
         try:
             pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
             initialized = True
-        except Exception:
-            initialized = False
+            logger.debug("CoInitializeEx STA succeeded")
+        except Exception as e:
+            logger.warning("CoInitializeEx failed: %s — continuing anyway", e)
     except ImportError:
-        # pywin32 isn't a hard dep; if it's missing, fall back without COM init.
-        # Most modern winrt builds will succeed on a thread the runtime itself
-        # initializes lazily.
-        initialized = False
+        logger.debug("pythoncom not available; skipping COM init")
 
     try:
-        try:
-            return asyncio.run(coro)
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                return loop.run_until_complete(coro)
-            finally:
-                loop.close()
+        return asyncio.new_event_loop().run_until_complete(coro)
     finally:
         if initialized:
             try:
                 import pythoncom
-
                 pythoncom.CoUninitialize()
             except Exception:
                 pass
 
 
-async def _recognize_async(path: Path) -> list[OcrBlock]:
-    # Imports are inside the function so the top-level module load stays cheap
-    # on systems where the winrt packages might be missing.
+# --- Image loading ---------------------------------------------------------
+
+
+async def _load_bitmap(path: Path):
+    """Read the image as a SoftwareBitmap.
+
+    We avoid StorageFile.get_file_from_path_async because it requires the
+    UI thread / capabilities on packaged apps and has been observed to hang
+    on plain Win32 processes. Instead we feed the bytes directly to a
+    DataWriter -> InMemoryRandomAccessStream.
+    """
     from winrt.windows.graphics.imaging import BitmapDecoder
-    from winrt.windows.media.ocr import OcrEngine
-    from winrt.windows.storage import StorageFile
-
-    file = await StorageFile.get_file_from_path_async(str(path.resolve()))
-    stream = await file.open_async(0)  # FileAccessMode.Read
-    try:
-        decoder = await BitmapDecoder.create_async(stream)
-        bitmap = await decoder.get_software_bitmap_async()
-    finally:
-        stream.close()
-
-    # Windows.Media.Ocr is single-language per OcrEngine instance. To handle
-    # mixed CJK names (Chinese + Japanese + Korean) in the same screenshot,
-    # we run the recognizer once per installed CJK language and merge results
-    # by position, keeping whichever pass produced the most "interesting"
-    # block at each location.
-    from winrt.windows.globalization import Language
-
-    engines = []
-    seen_tags: set[str] = set()
-
-    # Preferred languages, in priority order.
-    preferred_tags = (
-        "zh-Hans-CN", "zh-Hans", "zh-CN",
-        "ja", "ja-JP",
-        "ko", "ko-KR",
-        "en-US",
+    from winrt.windows.storage.streams import (
+        DataWriter,
+        InMemoryRandomAccessStream,
     )
-    for tag in preferred_tags:
-        if tag in seen_tags:
-            continue
+
+    raw = path.read_bytes()
+    stream = InMemoryRandomAccessStream()
+    writer = DataWriter(stream)
+    try:
+        writer.write_bytes(raw)
+        await writer.store_async()
+    finally:
+        # Detach so the underlying stream stays valid for the decoder.
         try:
-            lang = Language(tag)
-            eng = OcrEngine.try_create_from_language(lang)
-            if eng is not None:
-                engines.append((tag, eng))
-                seen_tags.add(tag)
+            writer.detach_stream()
         except Exception:
+            pass
+    stream.seek(0)
+    decoder = await BitmapDecoder.create_async(stream)
+    return await decoder.get_software_bitmap_async()
+
+
+# --- Recognition -----------------------------------------------------------
+
+
+# Order matters: Chinese first since this is the primary use-case. en-US is
+# a backstop because it's installed by default on every Windows machine.
+_PREFERRED_LANGS = (
+    "zh-Hans-CN", "zh-Hans", "zh-CN",
+    "ja-JP", "ja",
+    "ko-KR", "ko",
+    "en-US",
+)
+
+
+def _create_engine(tag: str):
+    from winrt.windows.globalization import Language
+    from winrt.windows.media.ocr import OcrEngine
+    try:
+        lang = Language(tag)
+        return OcrEngine.try_create_from_language(lang)
+    except Exception:
+        return None
+
+
+def _enum_engines():
+    """Return list of ``(tag, engine)`` for every available preferred language."""
+    from winrt.windows.media.ocr import OcrEngine
+    out = []
+    seen = set()
+    for tag in _PREFERRED_LANGS:
+        if tag in seen:
             continue
-
-    # Backstop: whatever the user has installed.
-    if not engines:
-        eng = OcrEngine.try_create_from_user_profile_languages()
+        eng = _create_engine(tag)
         if eng is not None:
-            engines.append(("user-profile", eng))
+            out.append((tag, eng))
+            seen.add(tag)
+    if not out:
+        try:
+            eng = OcrEngine.try_create_from_user_profile_languages()
+            if eng is not None:
+                out.append(("user-profile", eng))
+        except Exception:
+            pass
+    return out
 
-    if not engines:
-        return []
 
+async def _recognize_with_engine(engine, bitmap):
+    blocks = []
     img_w = float(bitmap.pixel_width) or 1.0
     img_h = float(bitmap.pixel_height) or 1.0
-
-    # Collect all blocks from all engines. We'll dedup near-identical bboxes
-    # later, preferring the result that contains more CJK characters when one
-    # engine read text but another only saw garbled latin.
-    all_blocks: list[OcrBlock] = []
-    for tag, engine in engines:
-        try:
-            result = await engine.recognize_async(bitmap)
-        except Exception:
+    result = await engine.recognize_async(bitmap)
+    if result is None:
+        return blocks, img_w, img_h
+    for line in result.lines:
+        words = list(line.words)
+        if not words:
             continue
-        if result is None:
+        line_text = line.text or ""
+        if _is_cjk_only(line_text):
+            text = "".join(w.text for w in words)
+        else:
+            text = " ".join(w.text for w in words)
+        text = text.strip()
+        if not text:
             continue
-        for line in result.lines:
-            words = list(line.words)
-            if not words:
-                continue
-            line_text = line.text or ""
-            if _is_cjk_only(line_text):
-                text = "".join(w.text for w in words)
-            else:
-                text = " ".join(w.text for w in words)
-            text = text.strip()
-            if not text:
-                continue
-            x0 = min(w.bounding_rect.x for w in words)
-            y0 = min(w.bounding_rect.y for w in words)
-            x1 = max(w.bounding_rect.x + w.bounding_rect.width for w in words)
-            y1 = max(w.bounding_rect.y + w.bounding_rect.height for w in words)
-            all_blocks.append(
-                OcrBlock(
-                    text=text,
-                    bbox=(x0 / img_w, y0 / img_h, x1 / img_w, y1 / img_h),
-                    confidence=1.0,
-                )
+        x0 = min(w.bounding_rect.x for w in words)
+        y0 = min(w.bounding_rect.y for w in words)
+        x1 = max(w.bounding_rect.x + w.bounding_rect.width for w in words)
+        y1 = max(w.bounding_rect.y + w.bounding_rect.height for w in words)
+        blocks.append(
+            OcrBlock(
+                text=text,
+                bbox=(x0 / img_w, y0 / img_h, x1 / img_w, y1 / img_h),
+                confidence=1.0,
             )
+        )
+    return blocks, img_w, img_h
 
+
+async def _recognize_async(path: Path) -> list[OcrBlock]:
+    t0 = time.monotonic()
+    logger.info("loading bitmap from %s", path)
+    bitmap = await _load_bitmap(path)
+    logger.info("bitmap loaded in %.2fs (%dx%d)",
+                time.monotonic() - t0, bitmap.pixel_width, bitmap.pixel_height)
+
+    engines = _enum_engines()
+    logger.info("available OCR engines: %s", [tag for tag, _ in engines])
+    if not engines:
+        logger.error("no Windows OCR engine available — install language packs")
+        return []
+
+    # Fast path: try the first engine. If it returns enough blocks, stop.
+    primary_tag, primary_engine = engines[0]
+    t1 = time.monotonic()
+    primary_blocks, _w, _h = await _recognize_with_engine(primary_engine, bitmap)
+    logger.info("primary engine %r: %d blocks in %.2fs",
+                primary_tag, len(primary_blocks), time.monotonic() - t1)
+
+    if len(primary_blocks) >= 3 or len(engines) == 1:
+        return primary_blocks
+
+    # Fan out to remaining engines for extra coverage (CJK names that the
+    # primary engine garbled). Cap to 3 extra engines so we don't burn
+    # 10 seconds on a slow box.
+    all_blocks = list(primary_blocks)
+    for tag, engine in engines[1:4]:
+        t2 = time.monotonic()
+        try:
+            extra_blocks, _w, _h = await _recognize_with_engine(engine, bitmap)
+            logger.info("engine %r: %d blocks in %.2fs",
+                        tag, len(extra_blocks), time.monotonic() - t2)
+            all_blocks.extend(extra_blocks)
+        except Exception as e:
+            logger.warning("engine %r failed: %s", tag, e)
     return _merge_overlapping(all_blocks)
 
 
-def _merge_overlapping(blocks: list[OcrBlock]) -> list[OcrBlock]:
-    """Dedup blocks from multiple OCR passes that cover the same region.
+# --- Block dedup -----------------------------------------------------------
 
-    When two blocks overlap by >70%, keep the one whose text has more CJK
-    characters (better recognition by a CJK-specific engine).
+
+def _merge_overlapping(blocks: list[OcrBlock]) -> list[OcrBlock]:
+    """Dedup blocks from multiple OCR passes covering the same region.
+
+    Overlap > 70% → keep the candidate with more CJK characters (the CJK
+    engine's read of a Chinese name beats the en-US engine's gibberish).
     """
     if len(blocks) < 2:
         return blocks
@@ -185,12 +246,10 @@ def _merge_overlapping(blocks: list[OcrBlock]) -> list[OcrBlock]:
 
 
 def _cjk_score(text: str) -> int:
-    """Higher = more likely to be a real CJK string."""
     return sum(1 for ch in text if _is_cjk_char(ch))
 
 
-def _bbox_overlap_ratio(a: tuple[float, float, float, float],
-                        b: tuple[float, float, float, float]) -> float:
+def _bbox_overlap_ratio(a, b) -> float:
     ax0, ay0, ax1, ay1 = a
     bx0, by0, bx1, by1 = b
     ix0 = max(ax0, bx0); iy0 = max(ay0, by0)
@@ -204,13 +263,6 @@ def _bbox_overlap_ratio(a: tuple[float, float, float, float],
 
 
 def _is_cjk_only(text: str) -> bool:
-    """Return True if the line is composed mostly of CJK characters.
-
-    Covers:
-    - CJK Unified Ideographs (Chinese / Japanese kanji / Korean hanja)
-    - Hiragana + Katakana (Japanese kana)
-    - Hangul syllables (Korean)
-    """
     cjk = sum(1 for ch in text if _is_cjk_char(ch))
     return cjk * 2 > len(text)
 
@@ -220,7 +272,7 @@ def _is_cjk_char(ch: str) -> bool:
     return (
         0x3040 <= code <= 0x309F     # Hiragana
         or 0x30A0 <= code <= 0x30FF  # Katakana
-        or 0x4E00 <= code <= 0x9FFF  # CJK ideographs (most common Han)
+        or 0x4E00 <= code <= 0x9FFF  # CJK ideographs
         or 0x3400 <= code <= 0x4DBF  # CJK ideographs Ext-A
         or 0xAC00 <= code <= 0xD7AF  # Hangul syllables
         or 0x1100 <= code <= 0x11FF  # Hangul jamo
@@ -232,4 +284,5 @@ def recognize(image_path: Path) -> list[OcrBlock]:
     try:
         return _run(_recognize_async(image_path))
     except Exception:
+        logger.exception("Windows OCR pipeline crashed")
         return []

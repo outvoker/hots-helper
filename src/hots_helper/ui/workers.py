@@ -139,21 +139,32 @@ class HotkeyWorker(QObject):
     ``winrt`` calls also need a COM apartment, which they don't get when
     invoked from arbitrary threads. We give this worker its own QThread so
     Qt manages the COM init / event loop for us.
+
+    Emits ``progress`` for each stage so the UI can show what's happening
+    even when the pipeline takes several seconds. ``finished`` carries the
+    final result.
     """
 
+    progress = Signal(str)
     finished = Signal(object)  # HotkeyShotResult
 
     def run(self) -> None:
+        import time
         log_lines: list[str] = []
         screenshot_path: Path | None = None
 
+        # Stage 1: screenshot
+        t0 = time.monotonic()
+        self.progress.emit("[1/3] Capturing screenshot…")
         try:
             from .screenshot import capture_fullscreen
             screenshot_path = capture_fullscreen()
-            log_lines.append(f"Screenshot saved: {screenshot_path}")
+            dt = time.monotonic() - t0
+            log_lines.append(f"[1/3] Screenshot saved in {dt:.1f}s: {screenshot_path}")
+            self.progress.emit(f"[1/3] Screenshot done ({dt:.1f}s)")
         except Exception as e:
-            log_lines.append(f"[screenshot error] {e}")
-            traceback.print_exc()
+            log_lines.append(f"[1/3 screenshot error] {type(e).__name__}: {e}")
+            log_lines.append(traceback.format_exc())
 
         map_name = ""
         allies: list[str] = [""] * 5
@@ -163,26 +174,71 @@ class HotkeyWorker(QObject):
         drafter = ""
 
         if screenshot_path is not None:
+            # Stage 2: low-level OCR (system engine pass)
+            t1 = time.monotonic()
+            self.progress.emit(
+                "[2/3] Running system OCR (this may take 1-3s on Windows)…"
+            )
+            blocks = []
             try:
-                from ..vision import parse_screenshot
-
-                parsed = parse_screenshot(screenshot_path)
-                map_name = parsed.map_name
-                allies = list(parsed.ally_names)
-                enemies = list(parsed.enemy_names)
-                ally_conf = list(parsed.ally_confidences)
-                enemy_conf = list(parsed.enemy_confidences)
-                drafter = parsed.drafter
-                if parsed.anything_found:
-                    log_lines.append(
-                        f"OCR: map={parsed.map_name!r} "
-                        f"allies={parsed.ally_names} enemies={parsed.enemy_names}"
-                    )
-                else:
-                    log_lines.append("OCR: no text detected on this screenshot.")
+                from ..ocr import recognize
+                blocks = recognize(screenshot_path)
+                dt = time.monotonic() - t1
+                log_lines.append(
+                    f"[2/3] OCR returned {len(blocks)} text block(s) in {dt:.1f}s"
+                )
+                self.progress.emit(
+                    f"[2/3] OCR done — {len(blocks)} text blocks ({dt:.1f}s)"
+                )
             except Exception as e:
-                log_lines.append(f"[OCR error] {type(e).__name__}: {e}")
-                traceback.print_exc()
+                log_lines.append(f"[2/3 OCR error] {type(e).__name__}: {e}")
+                log_lines.append(traceback.format_exc())
+                self.progress.emit(f"[2/3] OCR FAILED: {type(e).__name__}: {e}")
+
+            # Stage 3: bucket the blocks into map + 5 allies + 5 enemies
+            if blocks:
+                t2 = time.monotonic()
+                self.progress.emit("[3/3] Parsing names from OCR blocks…")
+                try:
+                    from ..vision import parse_screenshot
+                    parsed = parse_screenshot(screenshot_path)
+                    map_name = parsed.map_name
+                    allies = list(parsed.ally_names)
+                    enemies = list(parsed.enemy_names)
+                    ally_conf = list(parsed.ally_confidences)
+                    enemy_conf = list(parsed.enemy_confidences)
+                    drafter = parsed.drafter
+                    dt = time.monotonic() - t2
+                    if parsed.anything_found:
+                        log_lines.append(
+                            f"[3/3] Parsed in {dt:.1f}s: map={parsed.map_name!r}"
+                        )
+                        log_lines.append(f"      allies={parsed.ally_names}")
+                        log_lines.append(f"      enemies={parsed.enemy_names}")
+                        if drafter:
+                            log_lines.append(f"      drafter={drafter}")
+                        self.progress.emit(
+                            f"[3/3] Done. map={parsed.map_name!r}, "
+                            f"{sum(1 for n in allies if n)}/5 allies, "
+                            f"{sum(1 for n in enemies if n)}/5 enemies"
+                        )
+                    else:
+                        log_lines.append(
+                            "[3/3] OCR ran but no text matched the BP layout — "
+                            "is the screen really on the draft phase?"
+                        )
+                        self.progress.emit("[3/3] No BP layout detected")
+                except Exception as e:
+                    log_lines.append(
+                        f"[3/3 parse error] {type(e).__name__}: {e}"
+                    )
+                    log_lines.append(traceback.format_exc())
+                    self.progress.emit(
+                        f"[3/3] Parse FAILED: {type(e).__name__}: {e}"
+                    )
+
+        total = time.monotonic() - t0
+        log_lines.append(f"Total pipeline time: {total:.1f}s")
 
         result = HotkeyShotResult(
             screenshot_path=screenshot_path,
