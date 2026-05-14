@@ -358,11 +358,15 @@ class Store:
         return int(self.conn.execute("SELECT COUNT(*) FROM players").fetchone()[0])
 
     def find_players_by_name(self, name: str) -> list[sqlite3.Row]:
-        """Exact match first, then case-insensitive, then fuzzy (edit dist ≤ 2).
+        """Exact match → case-insensitive → fuzzy (small edit distance).
 
-        Fuzzy fallback handles OCR near-misses like ``jeanshong`` vs
-        ``jeanshang`` — common with stylized game fonts where ``a`` and ``o``
-        look nearly identical.
+        Fuzzy fallback handles OCR near-misses for both:
+          - ASCII: ``jeanshong`` vs ``jeanshang`` (a/o glyph confusion)
+          - CJK:   ``星海大恶魔`` vs ``星海大悪魔`` (one Han variant)
+
+        For CJK we cap edit distance at 1 because two-character drift on a
+        4-6 char Chinese name has too many false-positive collisions
+        (different real players sometimes share a 2-char substring).
         """
         rows = self.conn.execute(
             "SELECT toon_handle, display_name, last_seen_at FROM players WHERE display_name = ?",
@@ -377,18 +381,35 @@ class Store:
         ).fetchall()
         if rows:
             return rows
-        if not name.isascii() or len(name) < 4:
+        if len(name) < 3:
             return []
+
+        is_ascii = name.isascii()
+        if is_ascii:
+            max_dist = 1 if len(name) <= 6 else 2
+        else:
+            # CJK: only allow a single-character substitution to avoid
+            # collapsing "李敏" / "李明" / "李莉" together.
+            max_dist = 1 if len(name) >= 4 else 0
+            if max_dist == 0:
+                return []
+
         all_players = self.conn.execute(
             "SELECT toon_handle, display_name, last_seen_at FROM players"
         ).fetchall()
-        max_dist = 1 if len(name) <= 6 else 2
         candidates: list[tuple[int, sqlite3.Row]] = []
         for r in all_players:
             other = r["display_name"]
-            if not other.isascii() or abs(len(other) - len(name)) > max_dist:
+            if abs(len(other) - len(name)) > max_dist:
                 continue
-            d = _levenshtein(name.lower(), other.lower())
+            # ASCII-only matching for ASCII queries to avoid noise; mixed
+            # queries (Chinese + Latin) we treat case-sensitive.
+            if is_ascii != other.isascii():
+                continue
+            if is_ascii:
+                d = _levenshtein(name.lower(), other.lower())
+            else:
+                d = _levenshtein(name, other)
             if d <= max_dist:
                 candidates.append((d, r))
         candidates.sort(key=lambda c: c[0])

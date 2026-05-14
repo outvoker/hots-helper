@@ -9,16 +9,23 @@ surrounding UI noise that recognition becomes much more reliable.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
 
 from PIL import Image
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QCursor, QGuiApplication, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QCursor,
+    QGuiApplication,
+    QPainter,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import QDialog, QLabel
 
 
 class RegionSelectorDialog(QDialog):
-    """Show the screenshot full-screen, let the user drag a selection rect."""
+    """Show the screenshot fitted to the screen, let the user drag a rect."""
 
     region_picked = Signal(int, int, int, int)  # x, y, w, h in image pixels
 
@@ -47,23 +54,26 @@ class RegionSelectorDialog(QDialog):
 
         self.setFixedSize(self._scaled.size())
 
-        self._label = QLabel(self)
-        self._label.setPixmap(self._scaled)
-        self._label.setGeometry(0, 0, self._scaled.width(), self._scaled.height())
-
+        # Don't use a QLabel — we paint the pixmap ourselves so the
+        # selection rectangle paint happens on the same surface and isn't
+        # hidden behind a child widget.
         self._origin: QPoint | None = None
         self._rect: QRect | None = None
+
         self._hint = QLabel(
-            "Drag a tight rectangle over the player name. Esc to cancel.",
+            "Drag a tight rectangle over the player name. "
+            "Esc to cancel.",
             self,
         )
         self._hint.setStyleSheet(
             "background: rgba(0,0,0,180); color: #fc6; padding: 6px 12px; "
             "border-radius: 6px; font-weight: 600;"
         )
+        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._hint.adjustSize()
         self._hint.move(20, 20)
-        self._hint.raise_()
+
+    # --- mouse handling -----------------------------------------------------
 
     def mousePressEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
         if ev.button() == Qt.LeftButton:
@@ -94,15 +104,56 @@ class RegionSelectorDialog(QDialog):
         if ev.key() == Qt.Key_Escape:
             self.reject()
 
+    # --- painting -----------------------------------------------------------
+
     def paintEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
-        super().paintEvent(ev)
-        if self._rect is None:
-            return
         painter = QPainter(self)
-        pen = QPen(Qt.yellow)
-        pen.setWidth(2)
-        painter.setPen(pen)
-        painter.drawRect(self._rect)
+        # Background: the screenshot itself
+        painter.drawPixmap(0, 0, self._scaled)
+
+        if self._rect is not None and self._rect.width() > 0:
+            # Dim everything outside the selection so the chosen region
+            # stands out clearly.
+            painter.fillRect(
+                0, 0, self.width(), self._rect.top(),
+                QColor(0, 0, 0, 110),
+            )
+            painter.fillRect(
+                0, self._rect.bottom() + 1,
+                self.width(), self.height() - self._rect.bottom() - 1,
+                QColor(0, 0, 0, 110),
+            )
+            painter.fillRect(
+                0, self._rect.top(),
+                self._rect.left(), self._rect.height(),
+                QColor(0, 0, 0, 110),
+            )
+            painter.fillRect(
+                self._rect.right() + 1, self._rect.top(),
+                self.width() - self._rect.right() - 1, self._rect.height(),
+                QColor(0, 0, 0, 110),
+            )
+
+            # Bright yellow border around the selection.
+            pen = QPen(QColor(255, 220, 0))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.setBrush(QBrush(Qt.NoBrush))
+            painter.drawRect(self._rect)
+
+            # Live size label in the top-left corner of the selection.
+            painter.setPen(QColor(255, 220, 0))
+            txt = f"{self._rect.width()} × {self._rect.height()}"
+            painter.fillRect(
+                self._rect.left(), max(0, self._rect.top() - 22),
+                10 + 8 * len(txt), 20,
+                QColor(0, 0, 0, 200),
+            )
+            painter.drawText(
+                self._rect.left() + 4,
+                max(0, self._rect.top() - 22) + 14,
+                txt,
+            )
 
 
 def ocr_crop(screenshot_path: Path, x: int, y: int, w: int, h: int) -> str:

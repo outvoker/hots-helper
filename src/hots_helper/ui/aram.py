@@ -1,23 +1,24 @@
-"""ARAM hero ranking window.
+"""Hero strength ranking dialog.
 
-Shows hero strength on the random-pick mode, ordered by Wilson 95% lower
+Shows hero strength on a chosen game mode, ordered by Wilson 95% lower
 bound on win-rate so high-winrate-low-sample heroes don't dominate.
-Separate from the Storm League BP advisor — different mode, different
-balance, different hero pool.
+
+Supports both ARAM (天命乱斗) and Storm League (风暴联赛) — switch via
+the mode dropdown. Includes a search box to jump to a specific hero.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -37,15 +38,24 @@ def _fmt_k(value: float) -> str:
     return f"{value:.0f}"
 
 
-class AramRankingDialog(QDialog):
-    """Modal-but-resizable hero ranking table for ARAM mode."""
+# Display labels and the underlying mode string used in DB.
+_MODES = [
+    ("天命乱斗 (ARAM)", "ARAM"),
+    ("风暴联赛 (Storm League)", "Storm League"),
+]
 
-    def __init__(self, store: Store, parent=None) -> None:
+
+class HeroRankingDialog(QDialog):
+    """Resizable hero ranking table — switchable between ARAM and Storm League."""
+
+    def __init__(self, store: Store, parent=None,
+                 default_mode: str = "ARAM") -> None:
         super().__init__(parent)
         self.store = store
-        self.setWindowTitle("ARAM hero ranking — 天命乱斗英雄强度榜")
-        self.setMinimumSize(1100, 700)
+        self.setWindowTitle("英雄强度榜")
+        self.setMinimumSize(1180, 720)
         self.setStyleSheet("background:#161616; color:#eee;")
+        self._default_mode = default_mode
         self._build_ui()
         self._reload()
 
@@ -53,11 +63,23 @@ class AramRankingDialog(QDialog):
         root = QVBoxLayout(self)
 
         header = QHBoxLayout()
-        title = QLabel("天命乱斗 英雄强度榜")
-        title.setFont(QFont("", 14, QFont.Bold))
-        title.setStyleSheet("color:#fc6;")
-        header.addWidget(title)
+        self.title = QLabel("英雄强度榜")
+        self.title.setFont(QFont("", 14, QFont.Bold))
+        self.title.setStyleSheet("color:#fc6;")
+        header.addWidget(self.title)
         header.addStretch(1)
+
+        header.addWidget(QLabel("模式:"))
+        self.mode_combo = QComboBox()
+        for label, value in _MODES:
+            self.mode_combo.addItem(label, value)
+        # Select default mode
+        for i in range(self.mode_combo.count()):
+            if self.mode_combo.itemData(i) == self._default_mode:
+                self.mode_combo.setCurrentIndex(i)
+                break
+        self.mode_combo.currentIndexChanged.connect(self._reload)
+        header.addWidget(self.mode_combo)
 
         header.addWidget(QLabel("最少局数:"))
         self.min_games_spin = QSpinBox()
@@ -80,6 +102,19 @@ class AramRankingDialog(QDialog):
         header.addWidget(close_btn)
         root.addLayout(header)
 
+        # Search row
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("搜索英雄:"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("输入英雄名（支持部分匹配）")
+        self.search_edit.textChanged.connect(self._on_search_changed)
+        self.search_edit.returnPressed.connect(self._jump_to_match)
+        search_row.addWidget(self.search_edit, 1)
+        self.match_label = QLabel("")
+        self.match_label.setStyleSheet("color:#888;")
+        search_row.addWidget(self.match_label)
+        root.addLayout(search_row)
+
         self.summary = QLabel("")
         self.summary.setStyleSheet("color:#9ad; padding: 4px 0;")
         root.addWidget(self.summary)
@@ -96,7 +131,7 @@ class AramRankingDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
-        self.table.setSortingEnabled(False)  # we sort ourselves to use WLB
+        self.table.setSortingEnabled(False)
 
         columns = [
             ("排名", "right"),
@@ -114,11 +149,10 @@ class AramRankingDialog(QDialog):
         ]
         self.table.setColumnCount(len(columns))
         self.table.setHorizontalHeaderLabels([c[0] for c in columns])
-        for i, (_, align) in enumerate(columns):
-            if align == "right":
-                self.table.horizontalHeader().setSectionResizeMode(
-                    i, QHeaderView.ResizeToContents
-                )
+        for i, (_, _) in enumerate(columns):
+            self.table.horizontalHeader().setSectionResizeMode(
+                i, QHeaderView.ResizeToContents
+            )
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.Stretch
         )
@@ -127,7 +161,7 @@ class AramRankingDialog(QDialog):
         footer = QLabel(
             "<span style='color:#888;'>"
             "WLB = Wilson 95% 置信下界。WLB ≥ 50% 表示我们有 95% 把握真实胜率高于 50%；"
-            "排序时用 WLB 而不是原始胜率，可以避免「5 局 5 胜」这种噪音排到第一。"
+            "排序时用 WLB 而不是原始胜率，可以避免「5 局 5 胜」这种小样本噪音排到第一。"
             "</span>"
         )
         footer.setTextFormat(Qt.RichText)
@@ -135,10 +169,10 @@ class AramRankingDialog(QDialog):
         root.addWidget(footer)
 
     def _reload(self) -> None:
-        from ..db.store import _mode_clause  # noqa: F401  (just to confirm pkg shape)
+        mode = self.mode_combo.currentData()
+        mode_label = self.mode_combo.currentText()
+        self.title.setText(f"{mode_label} 英雄强度榜")
 
-        # Pull hero stats restricted to ARAM mode + grab extra metrics in
-        # one query so we don't have to fan out per hero.
         rows = self.store.conn.execute("""
             SELECT pm.hero,
                    COUNT(*) AS games,
@@ -153,9 +187,9 @@ class AramRankingDialog(QDialog):
                    AVG(pm.experience_contribution) AS xp
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE r.mode = 'ARAM'
+            WHERE r.mode = ?
             GROUP BY pm.hero
-        """).fetchall()
+        """, (mode,)).fetchall()
 
         min_games = self.min_games_spin.value()
         ranked = []
@@ -167,8 +201,7 @@ class AramRankingDialog(QDialog):
             wlb = wilson_lower_bound(won, g)
             ranked.append({
                 "hero": r["hero"], "games": g, "wins": won,
-                "wr": won / g if g else 0.0,
-                "wlb": wlb,
+                "wr": won / g if g else 0.0, "wlb": wlb,
                 "k": float(r["k"] or 0), "d": float(r["d"] or 0),
                 "a": float(r["a"] or 0),
                 "hd": float(r["hd"] or 0), "dt": float(r["dt"] or 0),
@@ -188,14 +221,14 @@ class AramRankingDialog(QDialog):
 
         # DB summary row
         total_games = self.store.conn.execute(
-            "SELECT COUNT(*) FROM replays WHERE mode='ARAM'"
+            "SELECT COUNT(*) FROM replays WHERE mode = ?", (mode,)
         ).fetchone()[0]
         total_pm = self.store.conn.execute("""
             SELECT COUNT(*) FROM player_match pm
-            JOIN replays r ON r.id = pm.replay_id WHERE r.mode='ARAM'
-        """).fetchone()[0]
+            JOIN replays r ON r.id = pm.replay_id WHERE r.mode = ?
+        """, (mode,)).fetchone()[0]
         self.summary.setText(
-            f"数据库样本: {total_games} 局 ARAM (合计 {total_pm} 个英雄选用记录) · "
+            f"数据库样本: {total_games} 局 {mode_label} (合计 {total_pm} 个英雄选用记录) · "
             f"展示 {len(ranked)} 个英雄 (≥ {min_games} 局)"
         )
 
@@ -217,17 +250,66 @@ class AramRankingDialog(QDialog):
             ]
             for j, txt in enumerate(cells):
                 item = QTableWidgetItem(txt)
-                if j == 1:
-                    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-                else:
-                    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
-                # Highlight strong picks (WLB ≥ 0.5) in green; weak (< 0.4) in red.
+                item.setTextAlignment(
+                    Qt.AlignVCenter | (Qt.AlignLeft if j == 1 else Qt.AlignRight)
+                )
                 wlb = r["wlb"]
                 if wlb >= 0.50:
-                    item.setForeground(Qt.green)
+                    item.setForeground(QColor(120, 220, 120))
                 elif wlb < 0.40:
-                    item.setForeground(Qt.red)
-                # Keep hero name readable regardless of color
-                if j == 1 and wlb < 0.50:
-                    item.setForeground(Qt.white)
+                    item.setForeground(QColor(220, 110, 110))
+                else:
+                    item.setForeground(QColor(230, 230, 230))
                 self.table.setItem(i, j, item)
+
+        # Re-apply any active search highlight
+        self._on_search_changed(self.search_edit.text())
+
+    # --- search ----------------------------------------------------------
+
+    def _matches(self, query: str) -> list[int]:
+        """Row indices whose hero name contains ``query`` (case-insensitive)."""
+        q = query.strip().lower()
+        if not q:
+            return []
+        out = []
+        for row in range(self.table.rowCount()):
+            hero_item = self.table.item(row, 1)
+            if hero_item and q in hero_item.text().lower():
+                out.append(row)
+        return out
+
+    def _on_search_changed(self, query: str) -> None:
+        matches = self._matches(query)
+        if not query.strip():
+            self.match_label.setText("")
+            return
+        if not matches:
+            self.match_label.setText(
+                f"<span style='color:#d99;'>无匹配</span>"
+            )
+            self.match_label.setTextFormat(Qt.RichText)
+            return
+        self.match_label.setTextFormat(Qt.RichText)
+        self.match_label.setText(
+            f"<span style='color:#9d9;'>{len(matches)} 个匹配 — "
+            f"按回车跳转到第一个</span>"
+        )
+        # Auto-jump on the first match for instant feedback.
+        self._jump_to_row(matches[0])
+
+    def _jump_to_match(self) -> None:
+        matches = self._matches(self.search_edit.text())
+        if matches:
+            self._jump_to_row(matches[0])
+
+    def _jump_to_row(self, row: int) -> None:
+        self.table.scrollToItem(
+            self.table.item(row, 1),
+            QAbstractItemView.PositionAtCenter,
+        )
+        self.table.selectRow(row)
+
+
+# Backwards-compat alias for code paths that still import the old name.
+AramRankingDialog = HeroRankingDialog

@@ -138,11 +138,15 @@ class MainWindow(QMainWindow):
         root.addWidget(hk_box)
 
         # --- Stats tools ------------------------------------------------------
-        tools_box = QGroupBox("Stats tools")
+        tools_box = QGroupBox("英雄强度榜")
         tb = QHBoxLayout(tools_box)
-        aram_btn = QPushButton("天命乱斗英雄强度榜")
-        aram_btn.setToolTip("基于本地数据库展示 ARAM 各英雄的强度排行")
-        aram_btn.clicked.connect(self._show_aram_ranking)
+        sl_btn = QPushButton("风暴联赛榜")
+        sl_btn.setToolTip("Storm League 各英雄的强度排行（基于本地数据库）")
+        sl_btn.clicked.connect(lambda: self._show_hero_ranking("Storm League"))
+        tb.addWidget(sl_btn)
+        aram_btn = QPushButton("天命乱斗榜")
+        aram_btn.setToolTip("ARAM 各英雄的强度排行（基于本地数据库）")
+        aram_btn.clicked.connect(lambda: self._show_hero_ranking("ARAM"))
         tb.addWidget(aram_btn)
         tb.addStretch(1)
         root.addWidget(tools_box)
@@ -323,11 +327,23 @@ class MainWindow(QMainWindow):
     def _test_popup(self) -> None:
         self._on_hotkey()
 
-    def _show_aram_ranking(self) -> None:
-        """Open the ARAM hero strength dialog (lazy-init, reused across opens)."""
+    def _show_hero_ranking(self, mode: str = "ARAM") -> None:
+        """Open the hero-strength dialog focused on the given mode.
+
+        Lazy-init and reused across opens; switching modes inside the
+        dialog also works via the dropdown.
+        """
         if not hasattr(self, "_aram_dialog") or self._aram_dialog is None:
-            from .aram import AramRankingDialog
-            self._aram_dialog = AramRankingDialog(self.store, parent=self)
+            from .aram import HeroRankingDialog
+            self._aram_dialog = HeroRankingDialog(
+                self.store, parent=self, default_mode=mode,
+            )
+        else:
+            # Switch the open dialog to the requested mode.
+            for i in range(self._aram_dialog.mode_combo.count()):
+                if self._aram_dialog.mode_combo.itemData(i) == mode:
+                    self._aram_dialog.mode_combo.setCurrentIndex(i)
+                    break
         self._aram_dialog.show()
         self._aram_dialog.raise_()
         self._aram_dialog.activateWindow()
