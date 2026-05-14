@@ -36,9 +36,11 @@ from PySide6.QtWidgets import (
 
 from ..bp import (
     BanCandidate,
+    MapTierBan,
     PickCandidate,
     TalentPick,
     recommend_bans,
+    recommend_map_strong_bans,
     recommend_picks,
 )
 from ..db import Store
@@ -136,6 +138,7 @@ class _PlayerCard(QFrame):
     """A single player slot; emits a signal when the user wants to re-query."""
 
     refresh_requested = Signal()
+    region_select_requested = Signal()
 
     def __init__(self, *, accent: str) -> None:
         super().__init__()
@@ -157,7 +160,7 @@ class _PlayerCard(QFrame):
         v.setContentsMargins(8, 6, 8, 6)
         v.setSpacing(4)
 
-        # Name row: editable field + refresh button
+        # Name row: editable field + confidence label + buttons.
         row = QHBoxLayout()
         row.setSpacing(4)
         self.name_edit = QLineEdit()
@@ -165,11 +168,29 @@ class _PlayerCard(QFrame):
         self.name_edit.returnPressed.connect(self.refresh_requested)
         row.addWidget(self.name_edit, 1)
 
+        # OCR confidence indicator: shows "94%" in grey, or "50%" in
+        # warning-yellow when below threshold. Hidden when no OCR was run
+        # (user typed manually). The user can scan the column to spot
+        # which slots need double-checking.
+        self.conf_label = QLabel("")
+        self.conf_label.setFixedWidth(46)
+        self.conf_label.setStyleSheet("color:#888; font-size:9pt;")
+        self.conf_label.setAlignment(Qt.AlignCenter)
+        row.addWidget(self.conf_label)
+
         self.refresh_btn = QPushButton("↻")
         self.refresh_btn.setToolTip("Re-query this player")
         self.refresh_btn.setFixedWidth(30)
         self.refresh_btn.clicked.connect(self.refresh_requested)
         row.addWidget(self.refresh_btn)
+
+        # Manual region select: user drags a rectangle over the player's
+        # name on the original screenshot, we re-OCR just that crop.
+        self.region_btn = QPushButton("🎯")
+        self.region_btn.setToolTip("Select the player name region on the screenshot")
+        self.region_btn.setFixedWidth(30)
+        self.region_btn.clicked.connect(self.region_select_requested)
+        row.addWidget(self.region_btn)
 
         self.expand_btn = QPushButton("▼")
         self.expand_btn.setToolTip("Show all heroes")
@@ -203,19 +224,30 @@ class _PlayerCard(QFrame):
 
     def set_name(self, name: str, confidence: float = 1.0) -> None:
         self.name_edit.setText(name)
-        # Visual hint for low-confidence OCR. Anything below 0.7 gets a yellow
-        # border so the user knows to double-check.
-        if name and confidence > 0 and confidence < 0.7:
-            self.name_edit.setStyleSheet(
-                "background: #1b1b1b; color: #fd6; "
-                "border: 2px solid #d90; padding: 2px 5px; font-size: 11pt;"
-            )
-            self.name_edit.setToolTip(
-                f"OCR confidence {confidence*100:.0f}% — please double-check"
-            )
+        # Visual hint for low-confidence OCR. Anything below 0.7 gets a
+        # yellow border + warning-coloured label.
+        if name and confidence > 0:
+            self.conf_label.setText(f"{confidence*100:.0f}%")
+            if confidence < 0.7:
+                self.name_edit.setStyleSheet(
+                    "background: #1b1b1b; color: #fd6; "
+                    "border: 2px solid #d90; padding: 2px 5px; font-size: 11pt;"
+                )
+                self.name_edit.setToolTip(
+                    f"OCR confidence {confidence*100:.0f}% — please double-check"
+                )
+                self.conf_label.setStyleSheet(
+                    "color:#fd6; font-size:9pt; font-weight:600;"
+                )
+            else:
+                self.name_edit.setStyleSheet("")
+                self.name_edit.setToolTip("")
+                self.conf_label.setStyleSheet("color:#9a9; font-size:9pt;")
         else:
-            self.name_edit.setStyleSheet("")  # fall back to the frame's style
+            self.name_edit.setStyleSheet("")
             self.name_edit.setToolTip("")
+            self.conf_label.setText("")
+            self.conf_label.setStyleSheet("color:#888; font-size:9pt;")
 
     def set_summaries(self, summaries: list[PlayerSummary]) -> None:
         self._summaries = summaries
@@ -281,46 +313,72 @@ class _BanList(QFrame):
         self.body.setTextFormat(Qt.RichText)
         v.addWidget(self.body)
 
-    def set_candidates(self, cands: list[BanCandidate],
-                       profiles=None) -> None:
-        if not cands:
-            # Tell the user why the list is empty: usually it's because the
-            # opponents haven't appeared in their local Storm League replays
-            # often enough, or aren't in the DB at all.
+    def set_candidates(
+        self,
+        cands: list[BanCandidate],
+        profiles=None,
+        map_tier: list[MapTierBan] | None = None,
+    ) -> None:
+        # Top section: opponent-history bans.
+        head_lines: list[str] = []
+        head_lines.append(
+            "<u style='color:#fbb;'>From enemy history</u>"
+        )
+        if cands:
+            for c in cands:
+                contrib = "  ·  ".join(
+                    f"{name} <span style='color:#daa;'>{w}/{g} ({(w/g*100 if g else 0):.0f}%)</span>"
+                    for name, g, w, _ in c.contributors
+                )
+                head_lines.append(
+                    f"<b>{c.hero}</b> "
+                    f"<span style='color:#caa;'>score {c.score:.2f} · "
+                    f"combined {c.total_wins}/{c.total_games} ({c.combined_wr*100:.0f}%)</span>"
+                    f"<br>&nbsp;&nbsp;&nbsp;&nbsp;{contrib}"
+                )
+        else:
             if profiles:
-                lines = [
+                head_lines.append(
                     "<i style='color:#a88;'>No statistically strong signature heroes "
                     "for these opponents yet — data is too thin.</i>"
-                ]
+                )
                 for p in profiles:
                     name = p.display_name or p.name_searched
                     if p.toon_handle == "":
-                        lines.append(
+                        head_lines.append(
                             f"&nbsp;&nbsp;• <b>{name}</b> — "
-                            "<span style='color:#a88;'>not in local DB (never played them in SL)</span>"
+                            "<span style='color:#a88;'>not in local DB</span>"
                         )
                     else:
-                        lines.append(
+                        head_lines.append(
                             f"&nbsp;&nbsp;• <b>{name}</b> — "
                             f"<span style='color:#caa;'>{p.total_games} SL games seen</span>"
                         )
-                self.body.setText("<br>".join(lines))
             else:
-                self.body.setText("<i style='color:#a88;'>no threat data for these opponents yet</i>")
-            return
-        lines: list[str] = []
-        for c in cands:
-            contrib = "  ·  ".join(
-                f"{name} <span style='color:#daa;'>{w}/{g} ({(w/g*100 if g else 0):.0f}%)</span>"
-                for name, g, w, _ in c.contributors
+                head_lines.append(
+                    "<i style='color:#a88;'>no opponent data yet</i>"
+                )
+
+        # Bottom section: map-tier strong heroes our squad doesn't play.
+        if map_tier:
+            head_lines.append("")
+            head_lines.append(
+                "<u style='color:#fbb;'>Strong on this map "
+                "<span style='color:#a88; font-weight: normal;'>(and squad doesn't play)</span></u>"
             )
-            lines.append(
-                f"<b>{c.hero}</b> "
-                f"<span style='color:#caa;'>score {c.score:.2f} · "
-                f"combined {c.total_wins}/{c.total_games} ({c.combined_wr*100:.0f}%)</span>"
-                f"<br>&nbsp;&nbsp;&nbsp;&nbsp;{contrib}"
-            )
-        self.body.setText("<br>".join(lines))
+            for c in map_tier:
+                squad_note = (
+                    "we never play"
+                    if c.squad_games_on_hero == 0
+                    else f"we play {c.squad_games_on_hero}x"
+                )
+                head_lines.append(
+                    f"<b>{c.hero}</b> "
+                    f"<span style='color:#caa;'>{c.map_wins}/{c.map_games} "
+                    f"WR {c.map_winrate*100:.0f}% · WLB {c.map_wilson_lb*100:.0f}% · "
+                    f"{squad_note}</span>"
+                )
+        self.body.setText("<br>".join(head_lines))
 
 
 class _PickList(QFrame):
@@ -422,6 +480,8 @@ class PopupWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, False)
         self.setStyleSheet("background: rgba(20,20,20,240); color: #eee;")
         self._drag_pos = None
+        # Set by show_for_map(); used by 🎯 region-select buttons.
+        self._screenshot_path = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -505,6 +565,9 @@ class PopupWindow(QWidget):
             card.refresh_requested.connect(
                 lambda c=card: self._requery_single(c)
             )
+            card.region_select_requested.connect(
+                lambda c=card: self._select_region_for(c)
+            )
             cards.append(card)
             v.addWidget(card)
         parent_layout.addWidget(col)
@@ -521,7 +584,9 @@ class PopupWindow(QWidget):
         ally_confidences: list[float] | None = None,
         enemy_confidences: list[float] | None = None,
         drafter: str | None = None,
+        screenshot_path=None,
     ) -> None:
+        self._screenshot_path = screenshot_path
         if map_name is not None:
             self.map_edit.setText(map_name)
         if ally_names:
@@ -561,6 +626,82 @@ class PopupWindow(QWidget):
 
     # --- analysis -------------------------------------------------------------
 
+    def _select_region_for(self, card: "_PlayerCard") -> None:
+        """Open the region-select dialog and rerun OCR on the user's crop."""
+        from .region_select import RegionSelectorDialog, ocr_crop
+        from PySide6.QtWidgets import QMessageBox
+
+        if not self._screenshot_path:
+            QMessageBox.information(
+                self, "No screenshot",
+                "No screenshot is associated with this popup. Trigger the "
+                "hotkey first so the app captures one.",
+            )
+            return
+        try:
+            dlg = RegionSelectorDialog(self._screenshot_path, parent=self)
+        except Exception as e:
+            QMessageBox.warning(self, "Cannot open region selector", str(e))
+            return
+
+        chosen: dict = {}
+
+        def _on_picked(x: int, y: int, w: int, h: int) -> None:
+            chosen["bbox"] = (x, y, w, h)
+
+        dlg.region_picked.connect(_on_picked)
+        if dlg.exec() != dlg.Accepted or "bbox" not in chosen:
+            return
+
+        x, y, w, h = chosen["bbox"]
+        text = ocr_crop(self._screenshot_path, x, y, w, h)
+        if text:
+            card.set_name(text, confidence=1.0)
+            # Trigger a re-query of just this slot (and refresh bans if it's
+            # an enemy slot).
+            self._requery_single(card)
+        else:
+            QMessageBox.information(
+                self, "No text recognized",
+                "OCR didn't find any text in that region. Try a tighter crop "
+                "or type the name manually.",
+            )
+
+    def _refresh_bans(self) -> None:
+        """Re-run the two ban analyses (opponent-history + map-tier)."""
+        ally_names = [c.name for c in self._ally_cards if c.name]
+        enemy_names = [c.name for c in self._enemy_cards if c.name]
+        map_name = self.map_edit.text().strip() or None
+
+        if enemy_names:
+            from ..bp import profile_opponents
+            bans = recommend_bans(self.store, enemy_names)
+            profiles = profile_opponents(self.store, enemy_names)
+        else:
+            bans = []
+            profiles = []
+
+        map_tier: list[MapTierBan] = []
+        if map_name:
+            squad_handles = self._resolve_squad_handles(ally_names)
+            if squad_handles:
+                map_tier = recommend_map_strong_bans(
+                    self.store, map_name, squad_handles
+                )
+
+        self.ban_panel.set_candidates(bans, profiles=profiles, map_tier=map_tier)
+
+    def _resolve_squad_handles(self, ally_names: list[str]) -> list[str]:
+        """Map ally display names to toon_handle for the map-tier ban query."""
+        handles: list[str] = []
+        for n in ally_names:
+            if not n:
+                continue
+            rows = self.store.find_players_by_name(n)
+            if rows:
+                handles.append(rows[0]["toon_handle"])
+        return handles
+
     def _run_analysis(self) -> None:
         map_name = self.map_edit.text().strip() or None
         ally_names = [c.name for c in self._ally_cards]
@@ -575,7 +716,21 @@ class PopupWindow(QWidget):
         else:
             bans = []
             profiles = []
-        self.ban_panel.set_candidates(bans, profiles=profiles)
+
+        # Second ban section: heroes statistically strong on this map that
+        # our squad rarely plays — even if no opponent has signal on them,
+        # leaving them open is risky.
+        map_tier_bans: list[MapTierBan] = []
+        if map_name:
+            squad_handles = self._resolve_squad_handles(ally_names)
+            if squad_handles:
+                map_tier_bans = recommend_map_strong_bans(
+                    self.store, map_name, squad_handles
+                )
+
+        self.ban_panel.set_candidates(
+            bans, profiles=profiles, map_tier=map_tier_bans
+        )
 
         # Pick list keyed on map.
         if map_name:
@@ -602,14 +757,6 @@ class PopupWindow(QWidget):
             return
         summaries = lookup_players(self.store, [name]).get(name, [])
         card.set_summaries(summaries)
-        # A single-card correction may shift the enemy ban list too.
-        if card in self._enemy_cards:
-            enemies = [c.name for c in self._enemy_cards if c.name]
-            if enemies:
-                from ..bp import profile_opponents
-                self.ban_panel.set_candidates(
-                    recommend_bans(self.store, enemies),
-                    profiles=profile_opponents(self.store, enemies),
-                )
-            else:
-                self.ban_panel.set_candidates([])
+        # A single-card correction may shift the ban list (any side change
+        # can affect map-tier bans through ally squad detection).
+        self._refresh_bans()

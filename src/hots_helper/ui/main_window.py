@@ -361,6 +361,7 @@ class MainWindow(QMainWindow):
             ally_confidences=ally_conf,
             enemy_confidences=enemy_conf,
             drafter=result.drafter or None,
+            screenshot_path=result.screenshot_path,
         )
 
     # --- stats ---------------------------------------------------------------

@@ -323,6 +323,96 @@ def recommend_bans(
     return out[:top]
 
 
+# --- map-tier ban candidates --------------------------------------------------
+
+
+@dataclass
+class MapTierBan:
+    """A hero that is statistically strong on this map and which our squad
+    can't reliably counter (because we never play it ourselves)."""
+    hero: str
+    map_games: int
+    map_wins: int
+    map_winrate: float
+    map_wilson_lb: float
+    global_winrate: float
+    lift_pp: float
+    p_value: float
+    squad_games_on_hero: int   # how many times the squad has picked this hero
+
+
+def recommend_map_strong_bans(
+    store: Store,
+    map_name: str,
+    squad_handles: list[str],
+    *,
+    min_games: int = 3,
+    min_wlb: float = 0.40,
+    squad_max_games: int = 5,
+    top: int = 5,
+    already_banned: set[str] | None = None,
+) -> list[MapTierBan]:
+    """Heroes that are strong on this map AND that we don't play.
+
+    Pure statistical view of the map: hero hit at least ``min_games`` games
+    on this map with Wilson LB ≥ ``min_wlb``, AND the squad has touched
+    that hero in at most ``squad_max_games`` games (so even if we don't ban
+    we can't reliably first-pick or counter it ourselves).
+    """
+    banned = {b.lower() for b in (already_banned or set())}
+    raw = store.map_hero_winrates(map_name)
+    out: list[MapTierBan] = []
+    handle_set = set(squad_handles)
+    for r in raw:
+        hero = r["hero"]
+        if hero.lower() in banned:
+            continue
+        m_games = int(r["games"])
+        if m_games < min_games:
+            continue
+        m_wins = int(r["wins"] or 0)
+        wlb = wilson_lower_bound(m_wins, m_games)
+        if wlb < min_wlb:
+            continue
+
+        # How often has the squad played this hero?
+        placeholders = ",".join("?" for _ in handle_set)
+        squad_games = store.conn.execute(
+            f"""
+            SELECT COUNT(*) AS n
+            FROM player_match pm JOIN replays rp ON rp.id = pm.replay_id
+            WHERE pm.hero = ?
+              AND pm.toon_handle IN ({placeholders})
+              AND rp.mode = 'Storm League'
+            """,
+            (hero, *handle_set),
+        ).fetchone()
+        squad_n = int(squad_games["n"] or 0)
+        if squad_n > squad_max_games:
+            continue
+
+        g_games, g_wins = store.global_hero_winrate(hero)
+        other_g = max(0, g_games - m_games)
+        other_w = max(0, g_wins - m_wins)
+        test = two_proportion_z_test(m_wins, m_games, other_w, other_g)
+
+        out.append(
+            MapTierBan(
+                hero=hero,
+                map_games=m_games,
+                map_wins=m_wins,
+                map_winrate=m_wins / m_games,
+                map_wilson_lb=wlb,
+                global_winrate=g_wins / g_games if g_games else 0.0,
+                lift_pp=test.lift * 100,
+                p_value=test.p_value,
+                squad_games_on_hero=squad_n,
+            )
+        )
+    out.sort(key=lambda c: (-c.map_wilson_lb, -c.map_games))
+    return out[:top]
+
+
 # --- pick side ----------------------------------------------------------------
 
 
