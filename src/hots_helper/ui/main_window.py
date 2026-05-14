@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QKeySequenceEdit,
     QLabel,
+    QLineEdit,
     QListWidget,
     QMainWindow,
     QMessageBox,
@@ -27,10 +28,11 @@ from PySide6.QtWidgets import (
 from ..config import Config, default_hots_replay_roots, discover_replay_dirs
 from ..db import Store
 from ..i18n import available_languages, on_change as on_lang_change, set_language, t
+from ..sync import make_sync
 from ..watcher.ingest import IngestResult
 from .hotkey import HotkeyManager
 from .popup import PopupWindow
-from .workers import HotkeyShotResult, HotkeyWorker, ScanWorker, WatchWorker
+from .workers import HotkeyShotResult, HotkeyWorker, ScanWorker, SyncWorker, WatchWorker
 
 
 def _qt_seq_to_pynput(seq: QKeySequence) -> str:
@@ -157,6 +159,42 @@ class MainWindow(QMainWindow):
         hb.addStretch(1)
         root.addWidget(self.hk_box)
 
+        # --- Cloud sync section -----------------------------------------------
+        self.sync_box = QGroupBox()
+        sb_outer = QVBoxLayout(self.sync_box)
+        # Row 1: URL + key + save
+        sb_top = QHBoxLayout()
+        self.sync_url_label = QLabel()
+        sb_top.addWidget(self.sync_url_label)
+        self.sync_url_edit = QLineEdit()
+        self.sync_url_edit.setText(self.config.supabase_url)
+        sb_top.addWidget(self.sync_url_edit, 1)
+        self.sync_key_label = QLabel()
+        sb_top.addWidget(self.sync_key_label)
+        self.sync_key_edit = QLineEdit()
+        self.sync_key_edit.setEchoMode(QLineEdit.Password)
+        self.sync_key_edit.setText(self.config.supabase_anon_key)
+        sb_top.addWidget(self.sync_key_edit, 1)
+        self.sync_save_btn = QPushButton()
+        self.sync_save_btn.clicked.connect(self._save_sync_credentials)
+        sb_top.addWidget(self.sync_save_btn)
+        sb_outer.addLayout(sb_top)
+        # Row 2: now button + auto chk + status label
+        sb_bot = QHBoxLayout()
+        self.sync_now_btn = QPushButton()
+        self.sync_now_btn.clicked.connect(lambda: self._start_sync(force=True))
+        sb_bot.addWidget(self.sync_now_btn)
+        self.sync_auto_chk = QCheckBox()
+        self.sync_auto_chk.setChecked(self.config.sync_auto)
+        self.sync_auto_chk.stateChanged.connect(self._toggle_sync_auto)
+        sb_bot.addWidget(self.sync_auto_chk)
+        sb_bot.addStretch(1)
+        self.sync_status_label = QLabel()
+        self.sync_status_label.setStyleSheet("color:#9ad;")
+        sb_bot.addWidget(self.sync_status_label)
+        sb_outer.addLayout(sb_bot)
+        root.addWidget(self.sync_box)
+
         # --- Stats tools ------------------------------------------------------
         self.tools_box = QGroupBox()
         tb = QHBoxLayout(self.tools_box)
@@ -182,6 +220,13 @@ class MainWindow(QMainWindow):
         self._scan_worker: ScanWorker | None = None
         # Lazily created when the user first clicks the ARAM button.
         self._aram_dialog = None
+        # Cloud sync runtime
+        self._sync_thread: QThread | None = None
+        self._sync_worker: SyncWorker | None = None
+        self._sync_busy = False
+        self._cloud_sync = make_sync(
+            self.store, self.config.supabase_url, self.config.supabase_anon_key
+        )
 
         self.watch_worker = WatchWorker(self.store)
         self.watch_worker.ingested.connect(self._on_watch_ingested)
@@ -214,6 +259,9 @@ class MainWindow(QMainWindow):
             self._log(t("ui.main.hotkey_registered", combo=self.config.hotkey))
         if self.watch_chk.isChecked():
             self._start_watching()
+        # Kick off a startup sync if the user has configured cloud creds.
+        if self._cloud_sync is not None and self.config.sync_auto:
+            self._start_sync(force=False)
 
     # --- i18n ---------------------------------------------------------------
 
@@ -240,6 +288,17 @@ class MainWindow(QMainWindow):
         self.shortcut_label.setText(t("ui.main.shortcut"))
         self.apply_btn.setText(t("ui.main.apply"))
         self.test_btn.setText(t("ui.main.test_popup"))
+
+        self.sync_box.setTitle(t("ui.main.sync_section"))
+        self.sync_url_label.setText(t("ui.main.sync_url"))
+        self.sync_key_label.setText(t("ui.main.sync_key"))
+        self.sync_url_edit.setPlaceholderText(t("ui.main.sync_url_placeholder"))
+        self.sync_key_edit.setPlaceholderText(t("ui.main.sync_key_placeholder"))
+        self.sync_save_btn.setText(t("ui.main.sync_save"))
+        self.sync_now_btn.setText(t("ui.main.sync_now"))
+        self.sync_auto_chk.setText(t("ui.main.sync_auto"))
+        if self._cloud_sync is None and hasattr(self, "sync_status_label"):
+            self.sync_status_label.setText(t("ui.main.sync_disabled"))
 
         self.tools_box.setTitle(t("ui.main.tools"))
         self.sl_btn.setText(t("ui.main.sl_ranking"))
@@ -354,6 +413,8 @@ class MainWindow(QMainWindow):
     def _on_scan_finished(self, new: int, skipped: int, errors: int) -> None:
         self._log(t("ui.main.scan_done", new=new, dup=skipped, err=errors))
         self._refresh_stats()
+        if new > 0:
+            self._start_sync(force=False)
 
     # --- watcher -------------------------------------------------------------
 
@@ -380,6 +441,8 @@ class MainWindow(QMainWindow):
             self._log(f"[watch error] {result.path.name}: {result.error}")
         elif result.inserted:
             self._log(f"[watch +] {result.path.name}")
+            # Push the freshly-ingested replay up.
+            self._start_sync(force=False)
         elif result.reason == "match-dup":
             self._log(f"[watch ~] {result.path.name}  (same match as one already in DB)")
         self._refresh_stats()
@@ -402,6 +465,82 @@ class MainWindow(QMainWindow):
 
     def _test_popup(self) -> None:
         self._on_hotkey()
+
+    # --- cloud sync ---------------------------------------------------------
+
+    def _save_sync_credentials(self) -> None:
+        url = self.sync_url_edit.text().strip()
+        key = self.sync_key_edit.text().strip()
+        # Allow blank/blank to disable, otherwise require both.
+        if (bool(url) ^ bool(key)):
+            QMessageBox.warning(
+                self,
+                t("ui.main.sync_save_warn_title"),
+                t("ui.main.sync_save_warn_body"),
+            )
+            return
+        self.config.supabase_url = url
+        self.config.supabase_anon_key = key
+        self.config.save()
+        self._cloud_sync = make_sync(self.store, url, key)
+        if self._cloud_sync is None:
+            self.sync_status_label.setText(t("ui.main.sync_disabled"))
+        else:
+            self._start_sync(force=True)
+
+    def _toggle_sync_auto(self, state: int) -> None:
+        self.config.sync_auto = bool(state)
+        self.config.save()
+
+    def _start_sync(self, *, force: bool) -> None:
+        if self._cloud_sync is None:
+            self.sync_status_label.setText(t("ui.main.sync_disabled"))
+            return
+        if self._sync_busy:
+            return
+        if not force and not self.config.sync_auto:
+            return
+        self._sync_busy = True
+        self.sync_status_label.setText(t("ui.main.sync_running"))
+
+        thread = QThread(self)
+        worker = SyncWorker(self._cloud_sync)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_sync_progress)
+        worker.finished.connect(self._on_sync_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(self._cleanup_sync_thread)
+        self._sync_thread = thread
+        self._sync_worker = worker
+        thread.start()
+
+    def _on_sync_progress(self, msg: str) -> None:
+        self._log(t("ui.main.sync_progress", msg=msg))
+        self.sync_status_label.setText(t("ui.main.sync_progress", msg=msg))
+
+    def _on_sync_finished(self, result) -> None:
+        for err in result.errors:
+            self._log(f"[sync error] {err}")
+        text = t(
+            "ui.main.sync_done",
+            pushed=result.total_pushed, pulled=result.total_pulled,
+        )
+        if result.errors:
+            text += " · " + t("ui.main.sync_errors", n=len(result.errors))
+        self.sync_status_label.setText(text)
+        self._log(text)
+        # Refresh the DB stats label since pulls may have added rows.
+        self._refresh_stats()
+
+    def _cleanup_sync_thread(self) -> None:
+        if self._sync_worker is not None:
+            self._sync_worker.deleteLater()
+            self._sync_worker = None
+        if self._sync_thread is not None:
+            self._sync_thread.deleteLater()
+            self._sync_thread = None
+        self._sync_busy = False
 
     def _show_hero_ranking(self, mode: str = "ARAM") -> None:
         """Open the hero-strength dialog focused on the given mode.
@@ -500,6 +639,9 @@ class MainWindow(QMainWindow):
         if self._hotkey_thread is not None:
             self._hotkey_thread.quit()
             self._hotkey_thread.wait(3000)
+        if self._sync_thread is not None:
+            self._sync_thread.quit()
+            self._sync_thread.wait(3000)
         if self.popup is not None:
             self.popup.close()
         super().closeEvent(event)

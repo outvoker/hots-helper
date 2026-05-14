@@ -117,6 +117,26 @@ class WatchWorker(QObject):
             self.stopped.emit()
 
 
+class SyncWorker(QObject):
+    """Run a single CloudSync.sync_now() round in a background thread."""
+
+    progress = Signal(str)
+    finished = Signal(object)  # SyncResult
+
+    def __init__(self, sync) -> None:
+        super().__init__()
+        self.sync = sync
+
+    def run(self) -> None:
+        from ..sync import SyncResult
+        try:
+            result = self.sync.sync_now(progress=self.progress.emit)
+        except Exception as e:
+            traceback.print_exc()
+            result = SyncResult(0, 0, 0, 0, 0, 0, [f"{type(e).__name__}: {e}"])
+        self.finished.emit(result)
+
+
 @dataclass
 class HotkeyShotResult:
     """Outcome of one hotkey-triggered capture+OCR run."""

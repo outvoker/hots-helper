@@ -107,6 +107,11 @@ class Config:
     auto_watch: bool = True
     # UI locale, "zh" or "en".
     language: str = "zh"
+    # Cloud sync — empty string means "disabled". Both must be set.
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    # Whether to sync automatically on startup + after each ingest.
+    sync_auto: bool = True
 
     @classmethod
     def load(cls) -> "Config":
@@ -122,6 +127,9 @@ class Config:
             hotkey=str(raw.get("hotkey") or "<ctrl>+<shift>+h"),
             auto_watch=bool(raw.get("auto_watch", True)),
             language=str(raw.get("language") or "zh"),
+            supabase_url=str(raw.get("supabase_url") or ""),
+            supabase_anon_key=str(raw.get("supabase_anon_key") or ""),
+            sync_auto=bool(raw.get("sync_auto", True)),
         )
 
     @classmethod
