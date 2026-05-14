@@ -60,28 +60,72 @@ _AMM_ID_TO_MODE = {
     50101: "ARAM",
 }
 
+# Maps that are exclusively used for ARAM (天命乱斗) on the CN client.
+# Anything mode-tagged ARAM but on a different map is misclassified and
+# should fall back to Quick Match (most likely) or whatever the ammId says.
+_ARAM_MAPS = {
+    "白银城",          # Silver City
+    "失落洞窟",        # Lost Cavern
+    "布莱克西斯前哨",   # Braxis Outpost
+    "工业园区",        # Industrial District
+    "Lost Cavern", "Silver City", "Industrial District", "Braxis Outpost",
+}
 
-def _infer_mode(game_opts: dict[str, Any], attr_map: dict[int, str]) -> str:
+
+def _infer_mode(
+    game_opts: dict[str, Any],
+    attr_map: dict[int, str],
+    map_name: str = "",
+) -> str:
+    """Classify game mode from the lobby + attribute events + map name.
+
+    The naive ``heroDuplicatesAllowed → ARAM`` rule fails on the live
+    client: Quick Match also allows duplicates, and so does Try Mode.
+    We use a layered decision tree instead, with the ARAM map whitelist
+    as the strongest signal (HotS only runs ARAM on a fixed pool of
+    maps).
+    """
     amm = game_opts.get("m_amm", False)
-    amm_id = game_opts.get("m_ammId", 0)
+    amm_id = int(game_opts.get("m_ammId") or 0)
     competitive = game_opts.get("m_competitive", False)
     dupes = game_opts.get("m_heroDuplicatesAllowed", False)
+    pick_mode = attr_map.get(4010) or attr_map.get(4015) or ""
 
     if not amm:
         return "Custom"
 
-    pick_mode = attr_map.get(4010) or attr_map.get(4015) or ""
-
-    if dupes:
-        if amm_id in _AMM_ID_TO_MODE and _AMM_ID_TO_MODE[amm_id] in {"ARAM", "Brawl"}:
-            return _AMM_ID_TO_MODE[amm_id]
-        return "ARAM"
-    if competitive:
+    # Strongest signals first.
+    if amm_id == 50091:
         return "Storm League"
-    if pick_mode == "drft":
+    if amm_id == 50021:
+        return "Try Mode"
+    if amm_id == 50031:
+        return "Brawl"
+    if amm_id == 50051:
+        return "Team League"
+    if amm_id == 50061:
         return "Unranked Draft"
+
+    # ARAM detection: must be on an ARAM map. Otherwise duplicate-allowed
+    # games are Quick Match (which also allows dupes for fill).
+    if map_name in _ARAM_MAPS:
+        return "ARAM"
+
+    # Storm League ammId may not be 50091 on every patch — fall back to
+    # the structural signals.
+    if competitive and not dupes and pick_mode == "drft":
+        return "Storm League"
+
+    if amm_id == 50001:
+        return "Quick Match"
     if amm_id in _AMM_ID_TO_MODE:
-        return _AMM_ID_TO_MODE[amm_id]
+        # Fallback for any other amm_id we know about, EXCEPT ARAM ids
+        # which we already gated on the map whitelist.
+        m = _AMM_ID_TO_MODE[amm_id]
+        if m == "ARAM":
+            return "Quick Match"
+        return m
+
     return "Quick Match"
 
 
@@ -448,7 +492,7 @@ def parse_replay(path: str | Path) -> Replay:
     attr_map = _extract_attr_map(attr_events)
     bans_t0, bans_t1 = _extract_bans(attr_events)
 
-    mode = _infer_mode(game_opts, attr_map)
+    mode = _infer_mode(game_opts, attr_map, map_name)
 
     # Per-slot skin attr (4003) and internal hero id (4002).
     skins_by_slot: dict[int, str] = {}

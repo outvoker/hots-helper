@@ -90,10 +90,14 @@ class HeroRankingDialog(QDialog):
 
         header.addWidget(QLabel("排序:"))
         self.sort_combo = QComboBox()
-        self.sort_combo.addItem("Wilson 置信下界 (推荐)", "wlb")
         self.sort_combo.addItem("胜率", "wr")
+        self.sort_combo.addItem("胜率（保守估计 WLB）", "wlb")
         self.sort_combo.addItem("局数", "games")
         self.sort_combo.addItem("英雄名", "hero")
+        self.sort_combo.setToolTip(
+            "「胜率」按真实胜率排，简单直观但小样本（如 5 局 5 胜 = 100%）容易排到顶；\n"
+            "「保守估计 WLB」会自动惩罚小样本，更适合做 BP 决策参考。"
+        )
         self.sort_combo.currentIndexChanged.connect(self._reload)
         header.addWidget(self.sort_combo)
 
@@ -160,8 +164,10 @@ class HeroRankingDialog(QDialog):
 
         footer = QLabel(
             "<span style='color:#888;'>"
-            "WLB = Wilson 95% 置信下界。WLB ≥ 50% 表示我们有 95% 把握真实胜率高于 50%；"
-            "排序时用 WLB 而不是原始胜率，可以避免「5 局 5 胜」这种小样本噪音排到第一。"
+            "<b>胜率</b>：实际胜场 ÷ 总局数。"
+            "<b>WLB</b>（Wilson 置信下界）：在 95% 置信度下真实胜率的最低估计值。"
+            "5 局 5 胜的胜率是 100% 但 WLB 只有 56%；70 局 50 胜（71%）的 WLB 是 60%。"
+            "BP 决策推荐看 WLB，避免小样本（比如 3 战 3 胜）误导。"
             "</span>"
         )
         footer.setTextFormat(Qt.RichText)
