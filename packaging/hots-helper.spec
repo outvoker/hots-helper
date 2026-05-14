@@ -21,6 +21,59 @@ project_root = Path.cwd()
 # package is registered as an absolute import target.
 entry = project_root / "packaging" / "launcher.py"
 
+
+def _windows_vc_runtime_dlls() -> list[tuple[str, str]]:
+    """Return ``(src, dest)`` pairs for the Visual C++ runtime DLLs.
+
+    Python 3.13's ``python313.dll`` depends on ``vcruntime140.dll`` /
+    ``vcruntime140_1.dll`` / ``msvcp140.dll`` / ``ucrtbase.dll`` (parts of
+    the VC++ 2015-2022 Redistributable). On a developer's box those are
+    almost always present (installed by VS, Office, games, drivers…) so
+    PyInstaller's build doesn't notice they're missing. On a clean
+    Windows machine the redistributable might not be installed, and the
+    user gets:
+
+        Failed to load Python DLL '...\\python313.dll'.
+        LoadLibrary: 找不到指定的模块.
+
+    To make the bundle self-contained we copy these DLLs into the
+    ``_internal`` folder ourselves. The bundle ends up ~3-5 MB larger,
+    but recipients don't have to install anything.
+    """
+    if sys.platform != "win32":
+        return []
+    import ctypes.util
+    import os
+    candidates = [
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",  # 64-bit only — MSVC 2017+
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
+        "concrt140.dll",
+        "ucrtbase.dll",
+    ]
+    search_paths = [
+        Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32",
+        Path(sys.base_prefix),
+        Path(sys.base_prefix) / "DLLs",
+    ]
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name in candidates:
+        if name in seen:
+            continue
+        for d in search_paths:
+            p = d / name
+            if p.is_file():
+                out.append((str(p), "."))
+                seen.add(name)
+                break
+    return out
+
+
+binaries = _windows_vc_runtime_dlls()
+
 datas = [
     # Bundle the vendored replay protocol files; runtime scans this dir.
     (str(project_root / "src" / "hots_helper" / "vendor"), "hots_helper/vendor"),
@@ -115,7 +168,7 @@ elif sys.platform == "darwin":
 a = Analysis(
     [str(entry)],
     pathex=[str(project_root / "src")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

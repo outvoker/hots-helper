@@ -66,6 +66,37 @@ _translations: dict[str, dict[str, str]] = {
     "ui.main.activity": {"zh": "运行日志", "en": "Activity"},
     "ui.main.language": {"zh": "界面语言", "en": "Language"},
 
+    "ui.main.sync_section": {"zh": "云同步", "en": "Cloud sync"},
+    "ui.main.sync_url": {"zh": "Supabase URL：", "en": "Supabase URL:"},
+    "ui.main.sync_key": {"zh": "Supabase 密钥：", "en": "Supabase anon key:"},
+    "ui.main.sync_save": {"zh": "保存", "en": "Save"},
+    "ui.main.sync_now": {"zh": "立即同步", "en": "Sync now"},
+    "ui.main.sync_auto": {"zh": "自动同步", "en": "Auto sync"},
+    "ui.main.sync_disabled": {"zh": "云同步未配置", "en": "Cloud sync not configured"},
+    "ui.main.sync_running": {"zh": "正在同步…", "en": "Syncing…"},
+    "ui.main.sync_progress": {"zh": "同步：{msg}", "en": "Sync: {msg}"},
+    "ui.main.sync_done": {
+        "zh": "同步完成：上传 {pushed}，下载 {pulled}",
+        "en": "Sync done: pushed {pushed}, pulled {pulled}",
+    },
+    "ui.main.sync_errors": {
+        "zh": "同步发生 {n} 个错误",
+        "en": "{n} sync error(s)",
+    },
+    "ui.main.sync_save_warn_title": {"zh": "保存失败", "en": "Save failed"},
+    "ui.main.sync_save_warn_body": {
+        "zh": "请同时填写 URL 和密钥；或将两者全部留空表示禁用同步。",
+        "en": "Provide both URL and key, or leave both blank to disable sync.",
+    },
+    "ui.main.sync_url_placeholder": {
+        "zh": "https://xxxx.supabase.co",
+        "en": "https://xxxx.supabase.co",
+    },
+    "ui.main.sync_key_placeholder": {
+        "zh": "粘贴 anon (public) 密钥",
+        "en": "Paste the anon (public) key",
+    },
+
     "ui.main.no_folders_warn_title": {"zh": "没有可用的文件夹", "en": "No folders"},
     "ui.main.no_folders_warn_body": {
         "zh": "请先添加至少一个录像文件夹。",
