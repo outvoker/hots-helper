@@ -151,6 +151,10 @@ _translations: dict[str, dict[str, str]] = {
 
     # === Popup ==========================================================
     "ui.popup.title": {"zh": "对局开始前侦查", "en": "Pre-game scout"},
+    "ui.popup.minimize_tip": {
+        "zh": "最小化为悬浮小标签（不影响全屏游戏）",
+        "en": "Minimise to a floating chip (doesn't affect fullscreen game)",
+    },
     "ui.popup.title_drafting": {"zh": "对局开始前侦查 — 当前选人：{name}",
                                 "en": "Pre-game scout — drafting: {name}"},
     "ui.popup.map": {"zh": "地图：", "en": "Map:"},

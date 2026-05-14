@@ -4,9 +4,12 @@
 # See the included LICENSE file for more information.
 #
 
-import six
-
-from heroprotocol.decoders import CorruptedError, BitPackedBuffer, BitPackedDecoder, VersionedDecoder
+from hots_helper.vendor.decoders import (
+    CorruptedError,
+    BitPackedBuffer,
+    BitPackedDecoder,
+    VersionedDecoder,
+)
 
 
 # Decoding instructions for each protocol type.
@@ -358,7 +361,7 @@ replay_initdata_typeid = 71
 
 def _varuint32_value(value):
     # Returns the numeric value from a SVarUint32 instance.
-    for v in six.itervalues(value):
+    for v in value.values():
         return v
     return 0
 

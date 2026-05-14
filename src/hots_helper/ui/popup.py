@@ -20,8 +20,16 @@ Each player slot is a card with:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import (
+    Qt,
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QSize,
+    Signal,
+)
+from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -46,6 +54,7 @@ from ..bp import (
 from ..db import Store
 from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
+from ..talent_names import talent_label
 
 
 # --- formatting helpers -------------------------------------------------------
@@ -476,7 +485,7 @@ class _PickList(QFrame):
         if not picks:
             return t("ui.popup.no_talent_data")
         return "<br>".join(
-            f"<b>T{tp.tier}</b> {tp.talent} "
+            f"<b>T{tp.tier}</b> {talent_label(tp.talent)} "
             f"<span style='color:#9b9;'>{tp.wins}/{tp.games} "
             f"WR {(tp.wins/tp.games*100 if tp.games else 0):.0f}% · "
             f"WLB {tp.wilson_lb*100:.0f}% · pick {tp.pick_rate*100:.0f}%</span>"
@@ -493,18 +502,35 @@ class PopupWindow(QWidget):
     def __init__(self, store: Store) -> None:
         super().__init__()
         self.store = store
+        # Qt.Tool keeps it off the taskbar / Alt-Tab; the StaysOnTop +
+        # ShowWithoutActivating combo lets the popup float over a
+        # fullscreen game without ever stealing focus, which is what
+        # would force the game to exit fullscreen / minimise.
         self.setWindowFlags(
             Qt.Tool
             | Qt.WindowStaysOnTopHint
             | Qt.FramelessWindowHint
             | Qt.NoDropShadowWindowHint
+            | Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
+        # Belt-and-suspenders: even if Qt accidentally tries to focus us,
+        # Qt::NoFocus on the top-level prevents Windows from waking
+        # exclusive-fullscreen apps and minimising them.
+        self.setFocusPolicy(Qt.NoFocus)
         self.setStyleSheet("background: rgba(20,20,20,240); color: #eee;")
         self._drag_pos = None
         self._screenshot_path = None
         self._current_drafter = ""
+
+        # Minimised "pill" state — a small floating chip docked near the
+        # top-center-right of the primary screen. Click it to restore.
+        self._is_pill = False
+        self._restore_geometry: QRect | None = None
+        self._geom_anim = QPropertyAnimation(self, b"geometry")
+        self._geom_anim.setDuration(220)
+        self._geom_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -525,6 +551,19 @@ class PopupWindow(QWidget):
         self.analyze_btn.clicked.connect(self._run_analysis)
         header.addWidget(self.analyze_btn)
 
+        # Minimise → pill button. Sits just before the close button so it
+        # gets the same visual weight without pushing other controls
+        # around.
+        self.minimize_btn = QPushButton("–")
+        self.minimize_btn.setFixedSize(28, 28)
+        self.minimize_btn.setToolTip(t("ui.popup.minimize_tip"))
+        self.minimize_btn.clicked.connect(self._collapse_to_pill)
+        self.minimize_btn.setStyleSheet(
+            "background:#225; color:#eee; border-radius:14px; "
+            "font-weight:bold; font-size: 14pt;"
+        )
+        header.addWidget(self.minimize_btn)
+
         close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
         close_btn.clicked.connect(self.hide)
@@ -533,9 +572,13 @@ class PopupWindow(QWidget):
         )
         header.addWidget(close_btn)
         root.addLayout(header)
+        # Stash the header layout so we can hide *all* its child widgets
+        # except the title when collapsing into a pill.
+        self._header_layout = header
 
         # --- scrollable body ------------------------------------------------
         scroll = QScrollArea()
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         content = QWidget()
@@ -648,7 +691,14 @@ class PopupWindow(QWidget):
             self.title.setText(t("ui.popup.title_drafting", name=drafter))
         else:
             self.title.setText(t("ui.popup.title"))
+        # Showing fresh data is implicitly a "draft something just
+        # happened" event, so always come back from pill mode here —
+        # otherwise the new draft sits invisibly inside the chip.
+        if self._is_pill:
+            self._restore_from_pill()
         self.show()
+        # raise_() bumps z-order without activating the window, so
+        # fullscreen games keep their focus. Never call activateWindow().
         self.raise_()
         if map_name or ally_names or enemy_names:
             self._run_analysis()
@@ -658,15 +708,104 @@ class PopupWindow(QWidget):
     def mousePressEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
         if ev.button() == Qt.LeftButton:
             self._drag_pos = ev.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._press_pos = ev.globalPosition().toPoint()
+            self._dragging = False
             ev.accept()
 
     def mouseMoveEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
         if ev.buttons() & Qt.LeftButton and self._drag_pos is not None:
-            self.move(ev.globalPosition().toPoint() - self._drag_pos)
+            # In pill mode, only treat as drag once the cursor moves
+            # past a small threshold — otherwise a click-to-restore
+            # would always look like a tiny drag.
+            delta = ev.globalPosition().toPoint() - getattr(self, "_press_pos", ev.globalPosition().toPoint())
+            if not self._is_pill or abs(delta.x()) + abs(delta.y()) > 4:
+                self._dragging = True
+                self.move(ev.globalPosition().toPoint() - self._drag_pos)
             ev.accept()
 
     def mouseReleaseEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
+        was_dragging = getattr(self, "_dragging", False)
         self._drag_pos = None
+        self._dragging = False
+        if (
+            self._is_pill
+            and ev.button() == Qt.LeftButton
+            and not was_dragging
+        ):
+            self._restore_from_pill()
+            ev.accept()
+
+    def mouseDoubleClickEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
+        # Double-click anywhere on the pill restores the full popup. The
+        # title is also a single-click target via _on_title_click_in_pill.
+        if self._is_pill and ev.button() == Qt.LeftButton:
+            self._restore_from_pill()
+            ev.accept()
+
+    # --- minimise / restore ---------------------------------------------------
+
+    _PILL_SIZE = QSize(220, 36)
+
+    def _pill_target_geometry(self) -> QRect:
+        """Top-center-right slot on the screen the popup currently lives on."""
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry()
+        # Top-center-but-shifted-right: 60% across, ~12px from the top.
+        x = avail.x() + int(avail.width() * 0.60) - self._PILL_SIZE.width() // 2
+        y = avail.y() + 12
+        return QRect(QPoint(x, y), self._PILL_SIZE)
+
+    def _collapse_to_pill(self) -> None:
+        if self._is_pill:
+            return
+        self._is_pill = True
+        self._restore_geometry = self.geometry()
+
+        # Hide everything except the title — keep the title visible inside
+        # the pill so the user can see "drafting: <hero>" at a glance.
+        self._scroll.hide()
+        self.footer_label.hide()
+        for btn in (
+            self.map_label,
+            self.map_edit,
+            self.analyze_btn,
+            self.minimize_btn,
+        ):
+            btn.hide()
+        self.title.setStyleSheet(
+            "font-size: 9pt; font-weight: 600; color:#eee; padding:0 6px;"
+        )
+
+        target = self._pill_target_geometry()
+        self._geom_anim.stop()
+        self._geom_anim.setStartValue(self.geometry())
+        self._geom_anim.setEndValue(target)
+        self._geom_anim.start()
+        self.setStyleSheet(
+            "background: rgba(20,20,28,235); color:#eee; border-radius:14px;"
+        )
+
+    def _restore_from_pill(self) -> None:
+        if not self._is_pill:
+            return
+        self._is_pill = False
+        target = self._restore_geometry or QRect(self.geometry().topLeft(), QSize(1200, 840))
+        self._geom_anim.stop()
+        self._geom_anim.setStartValue(self.geometry())
+        self._geom_anim.setEndValue(target)
+        self._geom_anim.start()
+
+        self._scroll.show()
+        self.footer_label.show()
+        for btn in (
+            self.map_label,
+            self.map_edit,
+            self.analyze_btn,
+            self.minimize_btn,
+        ):
+            btn.show()
+        self.title.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        self.setStyleSheet("background: rgba(20,20,20,240); color: #eee;")
 
     # --- analysis -------------------------------------------------------------
 

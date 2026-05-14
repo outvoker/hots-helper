@@ -79,6 +79,8 @@ datas = [
     (str(project_root / "src" / "hots_helper" / "vendor"), "hots_helper/vendor"),
     # The SQL schema the DB loads at startup.
     (str(project_root / "src" / "hots_helper" / "db" / "schema.sql"), "hots_helper/db"),
+    # Reference data (talent names, etc.) read at runtime via Path lookups.
+    (str(project_root / "src" / "hots_helper" / "data"), "hots_helper/data"),
 ]
 
 # RapidOCR ships its ONNX models + config alongside the package. Without
@@ -130,6 +132,9 @@ hiddenimports = [
     "hots_helper.ocr",
     "hots_helper.ocr.rapid",
     "hots_helper.vendor",
+    "hots_helper.vendor.decoders",
+    "hots_helper.data",
+    "hots_helper.talent_names",
     # PySide6 modules referenced only lazily
     "PySide6.QtCore",
     "PySide6.QtGui",
