@@ -25,6 +25,20 @@ _RIGHT_MIN_X = 0.82   # blocks whose center-x is above this fall into the enemy 
 _MAP_TOP_MAX_Y = 0.10
 _MAP_CENTER_X_MIN = 0.35
 _MAP_CENTER_X_MAX = 0.65
+
+# Each side has 5 hex slots arranged vertically; their name-strip y centers
+# (normalized) measured against the in-game BP screen. We snap detected blocks
+# to their nearest expected row, dropping anything that drifts off — that
+# eliminates voice-chat overlays (e.g. Kook's "current speaker" indicator)
+# whose y position falls between rows.
+_SLOT_Y_CENTERS = (0.20, 0.36, 0.52, 0.67, 0.82)
+_SLOT_Y_TOLERANCE = 0.05
+
+# Center stage: the player currently picking is drawn near the middle of the
+# screen with a "正在选择..." caption. We surface this name separately so the
+# UI can hint at it.
+_DRAFTER_X_RANGE = (0.40, 0.60)
+_DRAFTER_Y_RANGE = (0.45, 0.60)
 # BP-phase UI text. Keep an explicit ignore list of phrases we've seen on the
 # Chinese client; for other locales we rely on the heuristic in
 # ``_is_probably_ui_chrome`` (sentence-like punctuation + length cutoff).
@@ -56,6 +70,10 @@ class ParsedScreenshot:
     map_confidence: float = 0.0
     ally_confidences: list[float] = None  # type: ignore[assignment]
     enemy_confidences: list[float] = None  # type: ignore[assignment]
+    # Name of the player currently in the draft spotlight (shown in screen
+    # center alongside "正在选择禁用英雄" etc.). Empty string when no banner
+    # is detected.
+    drafter: str = ""
 
     def __post_init__(self) -> None:
         if self.ally_confidences is None:
@@ -119,37 +137,82 @@ def _pick_map(blocks: list[OcrBlock]) -> tuple[str, float]:
     return best.text.strip(), float(best.confidence)
 
 
+def _block_center_y(bbox: tuple[float, float, float, float]) -> float:
+    return (bbox[1] + bbox[3]) / 2
+
+
 def _pick_side(blocks: list[OcrBlock], side: str) -> tuple[list[str], list[float]]:
-    """Bucket blocks to the left or right side; return up to 5 names top-to-bottom."""
+    """Snap blocks to the 5 hex-slot y centers on the given side.
+
+    For each of 5 expected slot positions we keep the closest non-chrome block
+    within ``_SLOT_Y_TOLERANCE``. Blocks that don't align — voice-chat
+    overlays, popups, the central drafter banner — are silently dropped. This
+    is what keeps Kook's "current speaker" indicator from leaking into a
+    name slot.
+    """
     def in_side(b: OcrBlock) -> bool:
         cx = _center_x(b.bbox)
         if side == "L":
             return cx < _LEFT_MAX_X
         return cx > _RIGHT_MIN_X
 
-    picked = [
+    side_blocks = [
         b for b in blocks
         if in_side(b)
-        and b.bbox[1] > _MAP_TOP_MAX_Y
-        and b.bbox[1] < 0.95
         and not _is_probably_ui_chrome(b.text)
     ]
-    picked.sort(key=lambda b: b.bbox[1])
 
-    if len(picked) > 5:
-        picked = sorted(picked, key=lambda b: -b.confidence)[:5]
-        picked.sort(key=lambda b: b.bbox[1])
-
-    names = [b.text.strip() for b in picked]
-    confs = [float(b.confidence) for b in picked]
-    while len(names) < 5:
-        names.append("")
-        confs.append(0.0)
+    names: list[str] = []
+    confs: list[float] = []
+    used_ids: set[int] = set()
+    for slot_y in _SLOT_Y_CENTERS:
+        # Find the unused block whose y is closest to this slot, within
+        # tolerance. Tie-break by higher confidence so OCR's lower-confidence
+        # twin (when both engines on Windows produce a near-duplicate) loses.
+        best: OcrBlock | None = None
+        best_dy = _SLOT_Y_TOLERANCE
+        for b in side_blocks:
+            if id(b) in used_ids:
+                continue
+            dy = abs(_block_center_y(b.bbox) - slot_y)
+            if dy < best_dy:
+                best_dy = dy
+                best = b
+            elif (
+                best is not None
+                and abs(dy - best_dy) < 1e-6
+                and b.confidence > best.confidence
+            ):
+                best = b
+        if best is not None:
+            used_ids.add(id(best))
+            names.append(best.text.strip())
+            confs.append(float(best.confidence))
+        else:
+            names.append("")
+            confs.append(0.0)
     return names, confs
 
 
+def _pick_drafter(blocks: list[OcrBlock]) -> str:
+    """Find the spotlight player in screen center (just above the caption)."""
+    cx_min, cx_max = _DRAFTER_X_RANGE
+    cy_min, cy_max = _DRAFTER_Y_RANGE
+    candidates = [
+        b for b in blocks
+        if cx_min < _center_x(b.bbox) < cx_max
+        and cy_min < _block_center_y(b.bbox) < cy_max
+        and not _is_probably_ui_chrome(b.text)
+        and len(b.text.strip()) <= _MAX_NAME_LEN
+    ]
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda b: (-b.confidence, b.bbox[1]))
+    return candidates[0].text.strip()
+
+
 def parse_screenshot(image_path: Path) -> ParsedScreenshot:
-    """Full screenshot → (map, ally_names, enemy_names) + confidences."""
+    """Full screenshot → (map, ally_names, enemy_names, drafter) + confidences."""
     blocks = recognize(image_path)
     if not blocks:
         return ParsedScreenshot(
@@ -157,10 +220,12 @@ def parse_screenshot(image_path: Path) -> ParsedScreenshot:
             map_confidence=0.0,
             ally_confidences=[0.0] * 5,
             enemy_confidences=[0.0] * 5,
+            drafter="",
         )
     map_name, map_conf = _pick_map(blocks)
     ally_names, ally_confs = _pick_side(blocks, "L")
     enemy_names, enemy_confs = _pick_side(blocks, "R")
+    drafter = _pick_drafter(blocks)
     return ParsedScreenshot(
         map_name=map_name,
         ally_names=ally_names,
@@ -168,4 +233,5 @@ def parse_screenshot(image_path: Path) -> ParsedScreenshot:
         map_confidence=map_conf,
         ally_confidences=ally_confs,
         enemy_confidences=enemy_confs,
+        drafter=drafter,
     )

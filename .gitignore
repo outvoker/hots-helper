@@ -26,4 +26,8 @@ Snipaste_*.jpg
 test.jpeg
 test.jpg
 test.png
+screenshots/
 *.StormReplay
+
+# English report — Chinese is the canonical version
+REPORT.md

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -113,3 +115,83 @@ class WatchWorker(QObject):
             self._observer.join(timeout=2.0)
             self._observer = None
             self.stopped.emit()
+
+
+@dataclass
+class HotkeyShotResult:
+    """Outcome of one hotkey-triggered capture+OCR run."""
+    screenshot_path: Path | None
+    map_name: str
+    ally_names: list[str]
+    enemy_names: list[str]
+    ally_confidences: list[float]
+    enemy_confidences: list[float]
+    drafter: str
+    log_lines: list[str]
+
+
+class HotkeyWorker(QObject):
+    """Runs the screenshot + OCR pipeline off the Qt main thread.
+
+    Both steps can take >1s on Windows: ``mss`` writes a multi-megabyte PNG
+    and Windows.Media.Ocr blocks on multiple language passes. Doing them on
+    the main thread freezes the UI; on Windows the situation is worse because
+    ``winrt`` calls also need a COM apartment, which they don't get when
+    invoked from arbitrary threads. We give this worker its own QThread so
+    Qt manages the COM init / event loop for us.
+    """
+
+    finished = Signal(object)  # HotkeyShotResult
+
+    def run(self) -> None:
+        log_lines: list[str] = []
+        screenshot_path: Path | None = None
+
+        try:
+            from .screenshot import capture_fullscreen
+            screenshot_path = capture_fullscreen()
+            log_lines.append(f"Screenshot saved: {screenshot_path}")
+        except Exception as e:
+            log_lines.append(f"[screenshot error] {e}")
+            traceback.print_exc()
+
+        map_name = ""
+        allies: list[str] = [""] * 5
+        enemies: list[str] = [""] * 5
+        ally_conf: list[float] = [0.0] * 5
+        enemy_conf: list[float] = [0.0] * 5
+        drafter = ""
+
+        if screenshot_path is not None:
+            try:
+                from ..vision import parse_screenshot
+
+                parsed = parse_screenshot(screenshot_path)
+                map_name = parsed.map_name
+                allies = list(parsed.ally_names)
+                enemies = list(parsed.enemy_names)
+                ally_conf = list(parsed.ally_confidences)
+                enemy_conf = list(parsed.enemy_confidences)
+                drafter = parsed.drafter
+                if parsed.anything_found:
+                    log_lines.append(
+                        f"OCR: map={parsed.map_name!r} "
+                        f"allies={parsed.ally_names} enemies={parsed.enemy_names}"
+                    )
+                else:
+                    log_lines.append("OCR: no text detected on this screenshot.")
+            except Exception as e:
+                log_lines.append(f"[OCR error] {type(e).__name__}: {e}")
+                traceback.print_exc()
+
+        result = HotkeyShotResult(
+            screenshot_path=screenshot_path,
+            map_name=map_name,
+            ally_names=allies,
+            enemy_names=enemies,
+            ally_confidences=ally_conf,
+            enemy_confidences=enemy_conf,
+            drafter=drafter,
+            log_lines=log_lines,
+        )
+        self.finished.emit(result)

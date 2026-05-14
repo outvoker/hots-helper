@@ -28,8 +28,7 @@ from ..db import Store
 from ..watcher.ingest import IngestResult
 from .hotkey import HotkeyManager
 from .popup import PopupWindow
-from .screenshot import capture_fullscreen
-from .workers import ScanWorker, WatchWorker
+from .workers import HotkeyShotResult, HotkeyWorker, ScanWorker, WatchWorker
 
 
 def _qt_seq_to_pynput(seq: QKeySequence) -> str:
@@ -154,6 +153,12 @@ class MainWindow(QMainWindow):
         self.watch_worker.ingested.connect(self._on_watch_ingested)
         self.watch_worker.started_watching.connect(self._on_watch_started)
         self.watch_worker.stopped.connect(lambda: self._log("Watcher stopped."))
+
+        # Hotkey-triggered screenshot+OCR runs on its own QThread so the UI
+        # stays responsive even when Windows OCR takes a couple of seconds.
+        self._hotkey_thread: QThread | None = None
+        self._hotkey_worker: HotkeyWorker | None = None
+        self._hotkey_busy = False
 
         self.hotkey = HotkeyManager()
         self.hotkey.triggered.connect(self._on_hotkey)
@@ -307,37 +312,46 @@ class MainWindow(QMainWindow):
         self._on_hotkey()
 
     def _on_hotkey(self) -> None:
-        shot = None
-        try:
-            shot = capture_fullscreen()
-            self._log(f"Screenshot saved: {shot}")
-        except Exception as e:
-            self._log(f"[screenshot error] {e}")
+        # Reentry guard: if the user spams the hotkey while OCR is running
+        # we'd queue up multiple worker threads and confuse winrt.
+        if self._hotkey_busy:
+            self._log("Hotkey ignored — previous capture still running.")
+            return
+        self._hotkey_busy = True
+        self._log("Capturing screenshot…")
 
-        map_name = None
-        allies: list[str] | None = None
-        enemies: list[str] | None = None
-        ally_conf: list[float] | None = None
-        enemy_conf: list[float] | None = None
-        if shot is not None:
-            try:
-                from ..vision import parse_screenshot
+        thread = QThread(self)
+        worker = HotkeyWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_hotkey_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(self._cleanup_hotkey_thread)
+        self._hotkey_thread = thread
+        self._hotkey_worker = worker
+        thread.start()
 
-                parsed = parse_screenshot(shot)
-                if parsed.anything_found:
-                    map_name = parsed.map_name or None
-                    allies = parsed.ally_names
-                    enemies = parsed.enemy_names
-                    ally_conf = parsed.ally_confidences
-                    enemy_conf = parsed.enemy_confidences
-                    self._log(
-                        f"OCR: map={parsed.map_name!r} "
-                        f"allies={parsed.ally_names} enemies={parsed.enemy_names}"
-                    )
-                else:
-                    self._log("OCR: no text detected on this screenshot.")
-            except Exception as e:
-                self._log(f"[OCR error] {e}")
+    def _cleanup_hotkey_thread(self) -> None:
+        if self._hotkey_worker is not None:
+            self._hotkey_worker.deleteLater()
+            self._hotkey_worker = None
+        if self._hotkey_thread is not None:
+            self._hotkey_thread.deleteLater()
+            self._hotkey_thread = None
+        self._hotkey_busy = False
+
+    def _on_hotkey_finished(self, result: HotkeyShotResult) -> None:
+        for line in result.log_lines:
+            self._log(line)
+
+        map_name = result.map_name or None
+        allies = result.ally_names if any(result.ally_names) else None
+        enemies = result.enemy_names if any(result.enemy_names) else None
+        ally_conf = result.ally_confidences if any(result.ally_confidences) else None
+        enemy_conf = result.enemy_confidences if any(result.enemy_confidences) else None
+
+        if result.drafter:
+            self._log(f"Currently drafting: {result.drafter}")
 
         self.popup.show_for_map(
             map_name,
@@ -345,6 +359,7 @@ class MainWindow(QMainWindow):
             enemy_names=enemies,
             ally_confidences=ally_conf,
             enemy_confidences=enemy_conf,
+            drafter=result.drafter or None,
         )
 
     # --- stats ---------------------------------------------------------------
@@ -364,9 +379,11 @@ class MainWindow(QMainWindow):
         self.watch_worker.stop()
         self.hotkey.stop()
         if self._scan_thread is not None:
-            # ScanWorker has no cancel flag; the scan will finish on its own.
             self._scan_thread.quit()
             self._scan_thread.wait(5000)
+        if self._hotkey_thread is not None:
+            self._hotkey_thread.quit()
+            self._hotkey_thread.wait(3000)
         if self.popup is not None:
             self.popup.close()
         super().closeEvent(event)

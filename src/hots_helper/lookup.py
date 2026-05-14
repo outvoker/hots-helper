@@ -31,6 +31,7 @@ class HeroUsage:
     avg_siege_dmg: float
     avg_structure_dmg: float
     avg_healing: float
+    avg_dmg_taken: float
     avg_xp: float
     avg_cc: float
     avg_streak: float
@@ -97,6 +98,12 @@ class PlayerSummary:
     recent_wins: int
     map_games: int          # games on the focused map, if any
     map_wins: int
+    # Career averages (rolled up across all SL games for this player).
+    avg_hero_dmg: float = 0.0
+    avg_dmg_taken: float = 0.0
+    avg_healing: float = 0.0
+    avg_xp: float = 0.0
+    avg_cc: float = 0.0
     signature_heroes: list[HeroUsage] = field(default_factory=list)
     map_heroes: list[HeroUsage] = field(default_factory=list)
     frequent_teammates: list[TeammateEntry] = field(default_factory=list)
@@ -135,6 +142,7 @@ def _hero_usage_from_row(row: Any) -> HeroUsage:
         avg_siege_dmg=float(row["avg_siege_dmg"] or 0.0),
         avg_structure_dmg=float(row["avg_structure_dmg"] or 0.0),
         avg_healing=float(row["avg_healing"] or 0.0),
+        avg_dmg_taken=float(row["avg_dmg_taken"] or 0.0),
         avg_xp=float(row["avg_xp"] or 0.0),
         avg_cc=float(row["avg_cc"] or 0.0),
         avg_streak=float(row["avg_streak"] or 0.0),
@@ -284,6 +292,11 @@ def _summarize(
                 recent_wins=recent_w,
                 map_games=map_g,
                 map_wins=map_w,
+                avg_hero_dmg=float(overall["avg_hero_dmg"] or 0.0) if overall else 0.0,
+                avg_dmg_taken=float(overall["avg_dmg_taken"] or 0.0) if overall else 0.0,
+                avg_healing=float(overall["avg_healing"] or 0.0) if overall else 0.0,
+                avg_xp=float(overall["avg_xp"] or 0.0) if overall else 0.0,
+                avg_cc=float(overall["avg_cc"] or 0.0) if overall else 0.0,
                 signature_heroes=signature,
                 map_heroes=map_heroes,
                 frequent_teammates=teammates,

@@ -22,16 +22,46 @@ from . import OcrBlock
 
 
 def _run(coro):
-    """Run ``coro`` to completion regardless of the current event loop state."""
+    """Run ``coro`` to completion regardless of the current event loop state.
+
+    Each call also initializes a COM apartment for the calling thread. Without
+    this, ``Windows.Media.Ocr`` calls hang indefinitely on threads other than
+    the one that first imported pythonnet/winrt — which on Qt apps means a
+    deadlock the first time the user invokes OCR from anywhere except the
+    initializer. We use STA because winrt expects an apartment-threaded host;
+    failures are non-fatal (e.g. the thread might already have an apartment).
+    """
     try:
-        return asyncio.run(coro)
-    except RuntimeError:
-        # Already-running loop (e.g. inside Qt's event loop): use a new one.
-        loop = asyncio.new_event_loop()
+        import pythoncom  # provided by pywin32 on Windows
+
         try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+            pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+            initialized = True
+        except Exception:
+            initialized = False
+    except ImportError:
+        # pywin32 isn't a hard dep; if it's missing, fall back without COM init.
+        # Most modern winrt builds will succeed on a thread the runtime itself
+        # initializes lazily.
+        initialized = False
+
+    try:
+        try:
+            return asyncio.run(coro)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+    finally:
+        if initialized:
+            try:
+                import pythoncom
+
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
 
 async def _recognize_async(path: Path) -> list[OcrBlock]:

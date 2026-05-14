@@ -470,9 +470,13 @@ class Store:
                 AVG(pm.assists) AS avg_a,
                 AVG(pm.hero_damage) AS avg_hero_dmg,
                 AVG(pm.siege_damage) AS avg_siege_dmg,
+                AVG(pm.structure_damage) AS avg_structure_dmg,
+                AVG(pm.damage_taken) AS avg_dmg_taken,
                 AVG(pm.healing) AS avg_healing,
+                AVG(pm.self_healing) AS avg_self_healing,
                 AVG(pm.experience_contribution) AS avg_xp,
                 AVG(pm.time_cc_enemy_heroes) AS avg_cc,
+                AVG(pm.merc_camp_captures) AS avg_merc,
                 MAX(r.played_at) AS last_played
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id

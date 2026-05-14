@@ -56,11 +56,34 @@ def _fmt_kda(k: float, d: float, a: float) -> str:
     return f"{k:.1f}/{d:.1f}/{a:.1f}"
 
 
-def _hero_line(hero_name: str, games: int, wr: float, k: float, d: float, a: float) -> str:
+def _fmt_k(value: float) -> str:
+    """Render large counts compactly (43,123 → 43k; 510 → 510)."""
+    if value >= 10_000:
+        return f"{value/1000:.0f}k"
+    if value >= 1_000:
+        return f"{value/1000:.1f}k"
+    return f"{value:.0f}"
+
+
+def _hero_line(h) -> str:
+    """One line per hero. Shows games / WR / KDA + the most-relevant
+    impact metrics. We keep all of damage / damage-taken / structure /
+    healing / xp / cc; tanks tend to have low hero-damage and high taken,
+    healers low damage and high healing — by showing them all the user
+    can read role from the numbers."""
     return (
-        f"<b>{hero_name}</b>  "
-        f"<span style='color:#aaa;'>{games}G  {_fmt_pct(wr)}  "
-        f"K/D/A {_fmt_kda(k, d, a)}</span>"
+        f"<b>{h.hero}</b>  "
+        f"<span style='color:#aaa;'>"
+        f"{h.games}G {_fmt_pct(h.winrate)}  "
+        f"K/D/A {_fmt_kda(h.avg_k, h.avg_d, h.avg_a)}<br>"
+        f"&nbsp;&nbsp;&nbsp;&nbsp;"
+        f"英伤 {_fmt_k(h.avg_hero_dmg)} · "
+        f"承伤 {_fmt_k(h.avg_dmg_taken)} · "
+        f"推塔 {_fmt_k(h.avg_structure_dmg)} · "
+        f"治疗 {_fmt_k(h.avg_healing)} · "
+        f"XP {_fmt_k(h.avg_xp)} · "
+        f"控时 {h.avg_cc:.0f}s"
+        f"</span>"
     )
 
 
@@ -76,6 +99,18 @@ def _summary_body_html(summary: PlayerSummary, expanded: bool) -> str:
         f"<b>{_fmt_pct(summary.winrate)}</b> WR &nbsp; "
         f"K/D/A {_fmt_kda(k, d, a)}"
     )
+    # Career averages line — gives a quick tell on whether the player is
+    # a damage dealer, tank, healer, or pusher even before reading hero list.
+    if summary.total_games:
+        parts.append(
+            "<span style='color:#9ad;'>"
+            f"avg 英伤 {_fmt_k(summary.avg_hero_dmg)} · "
+            f"承伤 {_fmt_k(summary.avg_dmg_taken)} · "
+            f"治疗 {_fmt_k(summary.avg_healing)} · "
+            f"XP {_fmt_k(summary.avg_xp)} · "
+            f"控时 {summary.avg_cc:.0f}s"
+            "</span>"
+        )
 
     heroes = summary.signature_heroes
     if not heroes:
@@ -85,10 +120,7 @@ def _summary_body_html(summary: PlayerSummary, expanded: bool) -> str:
     shown = heroes if expanded else heroes[:3]
     parts.append("<u>Heroes used</u>")
     for h in shown:
-        parts.append(
-            "&nbsp;&nbsp;• "
-            + _hero_line(h.hero, h.games, h.winrate, h.avg_k, h.avg_d, h.avg_a)
-        )
+        parts.append("&nbsp;&nbsp;• " + _hero_line(h))
     remaining = len(heroes) - len(shown)
     if not expanded and remaining > 0:
         parts.append(
@@ -465,6 +497,7 @@ class PopupWindow(QWidget):
         enemy_names: list[str] | None = None,
         ally_confidences: list[float] | None = None,
         enemy_confidences: list[float] | None = None,
+        drafter: str | None = None,
     ) -> None:
         if map_name is not None:
             self.map_edit.setText(map_name)
@@ -476,6 +509,13 @@ class PopupWindow(QWidget):
             confs = enemy_confidences or [1.0] * 5
             for i, n in enumerate(enemy_names[:5]):
                 self._enemy_cards[i].set_name(n, confs[i] if i < len(confs) else 1.0)
+        # Drafter banner (the player currently picking) is shown in the title
+        # bar so the user can copy-paste them into the right slot. We don't
+        # auto-fill because we can't reliably guess which side they belong to.
+        if drafter:
+            self.title.setText(f"Pre-game scout — drafting: {drafter}")
+        else:
+            self.title.setText("Pre-game scout")
         self.show()
         self.raise_()
         if map_name or ally_names or enemy_names:
