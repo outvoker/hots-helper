@@ -29,6 +29,7 @@ from ..config import Config, default_hots_replay_roots, discover_replay_dirs
 from ..db import Store
 from ..i18n import available_languages, on_change as on_lang_change, set_language, t
 from ..sync import make_sync
+from ..sync_defaults import DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL
 from ..watcher.ingest import IngestResult
 from .hotkey import HotkeyManager
 from .popup import PopupWindow
@@ -224,9 +225,13 @@ class MainWindow(QMainWindow):
         self._sync_thread: QThread | None = None
         self._sync_worker: SyncWorker | None = None
         self._sync_busy = False
-        self._cloud_sync = make_sync(
-            self.store, self.config.supabase_url, self.config.supabase_anon_key
-        )
+        # If the user hasn't set their own credentials, fall back to the
+        # built-in defaults shipped with the app. ``has_defaults()`` returns
+        # False on dev builds, so this path is a no-op when defaults are
+        # blank.
+        eff_url = self.config.supabase_url or DEFAULT_SUPABASE_URL
+        eff_key = self.config.supabase_anon_key or DEFAULT_SUPABASE_ANON_KEY
+        self._cloud_sync = make_sync(self.store, eff_url, eff_key)
 
         self.watch_worker = WatchWorker(self.store)
         self.watch_worker.ingested.connect(self._on_watch_ingested)
