@@ -44,6 +44,7 @@ from ..bp import (
     recommend_picks,
 )
 from ..db import Store
+from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
 
 
@@ -68,66 +69,70 @@ def _fmt_k(value: float) -> str:
 
 
 def _hero_line(h) -> str:
-    """One line per hero. Shows games / WR / KDA + the most-relevant
-    impact metrics. We keep all of damage / damage-taken / structure /
-    healing / xp / cc; tanks tend to have low hero-damage and high taken,
-    healers low damage and high healing — by showing them all the user
-    can read role from the numbers."""
+    """One line per hero. Two visual lines: KDA summary, then per-metric
+    breakdown so the user can read the player's role from the numbers."""
+    main = t("ui.popup.card.hero_line_main",
+             games=h.games,
+             wr=f"{h.winrate*100:.0f}",
+             kda=_fmt_kda(h.avg_k, h.avg_d, h.avg_a))
+    metrics = t("ui.popup.card.hero_line_metrics",
+                hd=_fmt_k(h.avg_hero_dmg),
+                dt=_fmt_k(h.avg_dmg_taken),
+                strd=_fmt_k(h.avg_structure_dmg),
+                hl=_fmt_k(h.avg_healing),
+                xp=_fmt_k(h.avg_xp),
+                cc=f"{h.avg_cc:.0f}")
     return (
         f"<b>{h.hero}</b>  "
-        f"<span style='color:#aaa;'>"
-        f"{h.games}G {_fmt_pct(h.winrate)}  "
-        f"K/D/A {_fmt_kda(h.avg_k, h.avg_d, h.avg_a)}<br>"
-        f"&nbsp;&nbsp;&nbsp;&nbsp;"
-        f"英伤 {_fmt_k(h.avg_hero_dmg)} · "
-        f"承伤 {_fmt_k(h.avg_dmg_taken)} · "
-        f"推塔 {_fmt_k(h.avg_structure_dmg)} · "
-        f"治疗 {_fmt_k(h.avg_healing)} · "
-        f"XP {_fmt_k(h.avg_xp)} · "
-        f"控时 {h.avg_cc:.0f}s"
-        f"</span>"
+        f"<span style='color:#aaa;'>{main}<br>"
+        f"&nbsp;&nbsp;&nbsp;&nbsp;{metrics}</span>"
     )
 
 
 def _summary_body_html(summary: PlayerSummary, expanded: bool) -> str:
     """Render the body of a player card based on a PlayerSummary."""
     if summary.note:
-        return f'<span style="color:#b77;">{summary.note}</span>'
+        # Translate well-known notes; pass anything unknown through.
+        if summary.note == "not found in local database":
+            note = t("ui.popup.card.note_not_found")
+        else:
+            note = summary.note
+        return f'<span style="color:#b77;">{note}</span>'
 
     k, d, a = summary.overall_kda
     parts: list[str] = []
     parts.append(
-        f"<b>{summary.total_games}</b> games &nbsp; "
-        f"<b>{_fmt_pct(summary.winrate)}</b> WR &nbsp; "
-        f"K/D/A {_fmt_kda(k, d, a)}"
+        t(
+            "ui.popup.card.summary_line",
+            games=f"<b>{summary.total_games}</b>",
+            wr=f"<b>{summary.winrate*100:.0f}</b>",
+            kda=_fmt_kda(k, d, a),
+        )
     )
-    # Career averages line — gives a quick tell on whether the player is
-    # a damage dealer, tank, healer, or pusher even before reading hero list.
     if summary.total_games:
         parts.append(
             "<span style='color:#9ad;'>"
-            f"avg 英伤 {_fmt_k(summary.avg_hero_dmg)} · "
-            f"承伤 {_fmt_k(summary.avg_dmg_taken)} · "
-            f"治疗 {_fmt_k(summary.avg_healing)} · "
-            f"XP {_fmt_k(summary.avg_xp)} · "
-            f"控时 {summary.avg_cc:.0f}s"
-            "</span>"
+            + t("ui.popup.card.career_avg",
+                hd=_fmt_k(summary.avg_hero_dmg),
+                dt=_fmt_k(summary.avg_dmg_taken),
+                hl=_fmt_k(summary.avg_healing),
+                xp=_fmt_k(summary.avg_xp),
+                cc=f"{summary.avg_cc:.0f}")
+            + "</span>"
         )
 
     heroes = summary.signature_heroes
     if not heroes:
-        parts.append("<span style='color:#888;'>no hero usage in Storm League yet</span>")
+        parts.append(t("ui.popup.card.no_hero_usage"))
         return "<br>".join(parts)
 
     shown = heroes if expanded else heroes[:3]
-    parts.append("<u>Heroes used</u>")
+    parts.append(f"<u>{t('ui.popup.card.heroes_used')}</u>")
     for h in shown:
         parts.append("&nbsp;&nbsp;• " + _hero_line(h))
     remaining = len(heroes) - len(shown)
     if not expanded and remaining > 0:
-        parts.append(
-            f"<span style='color:#888;'>&nbsp;&nbsp;(+{remaining} more heroes — click ▼ to expand)</span>"
-        )
+        parts.append(t("ui.popup.card.more_heroes", n=remaining))
     return "<br>".join(parts)
 
 
@@ -164,7 +169,7 @@ class _PlayerCard(QFrame):
         row = QHBoxLayout()
         row.setSpacing(4)
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("player name")
+        self.name_edit.setPlaceholderText(t("ui.popup.card.player_name_placeholder"))
         self.name_edit.returnPressed.connect(self.refresh_requested)
         row.addWidget(self.name_edit, 1)
 
@@ -179,7 +184,7 @@ class _PlayerCard(QFrame):
         row.addWidget(self.conf_label)
 
         self.refresh_btn = QPushButton("↻")
-        self.refresh_btn.setToolTip("Re-query this player")
+        self.refresh_btn.setToolTip(t("ui.popup.card.requery_tip"))
         self.refresh_btn.setFixedWidth(30)
         self.refresh_btn.clicked.connect(self.refresh_requested)
         row.addWidget(self.refresh_btn)
@@ -187,13 +192,13 @@ class _PlayerCard(QFrame):
         # Manual region select: user drags a rectangle over the player's
         # name on the original screenshot, we re-OCR just that crop.
         self.region_btn = QPushButton("🎯")
-        self.region_btn.setToolTip("Select the player name region on the screenshot")
+        self.region_btn.setToolTip(t("ui.popup.card.region_tip"))
         self.region_btn.setFixedWidth(30)
         self.region_btn.clicked.connect(self.region_select_requested)
         row.addWidget(self.region_btn)
 
         self.expand_btn = QPushButton("▼")
-        self.expand_btn.setToolTip("Show all heroes")
+        self.expand_btn.setToolTip(t("ui.popup.card.expand_tip"))
         self.expand_btn.setFixedWidth(30)
         self.expand_btn.setCheckable(True)
         self.expand_btn.toggled.connect(self._toggle_expanded)
@@ -265,7 +270,7 @@ class _PlayerCard(QFrame):
 
     def _render(self) -> None:
         if not self._summaries:
-            self.body.setText("<i style='color:#888;'>no data</i>")
+            self.body.setText(t("ui.popup.card.no_data"))
             self.resolved.setVisible(False)
             return
         # When multiple handles share a display name, show them stacked.
@@ -284,7 +289,9 @@ class _PlayerCard(QFrame):
         self.body.setText("<hr style='border-color:#333;'>".join(blocks))
         self.resolved.setVisible(any_resolved_diff)
         if any_resolved_diff and len(self._summaries) == 1:
-            self.resolved.setText(f"(found as: {self._summaries[0].display_name})")
+            self.resolved.setText(
+                t("ui.popup.card.found_as", name=self._summaries[0].display_name)
+            )
         else:
             self.resolved.setText("")
 
@@ -303,15 +310,28 @@ class _BanList(QFrame):
         )
         v = QVBoxLayout(self)
         v.setContentsMargins(10, 8, 10, 8)
-        title = QLabel("🚫 Ban suggestions "
-                       "<span style='color:#b88; font-weight: normal;'>from enemy history</span>")
-        title.setTextFormat(Qt.RichText)
-        title.setFont(QFont("", 11, QFont.Bold))
-        v.addWidget(title)
+        self.title_label = QLabel()
+        self.title_label.setTextFormat(Qt.RichText)
+        self.title_label.setFont(QFont("", 11, QFont.Bold))
+        v.addWidget(self.title_label)
         self.body = QLabel("")
         self.body.setWordWrap(True)
         self.body.setTextFormat(Qt.RichText)
         v.addWidget(self.body)
+        self._last_args: tuple = ()
+        self._retranslate()
+        on_lang_change(lambda _c: self._on_lang())
+
+    def _retranslate(self) -> None:
+        self.title_label.setText(
+            f"{t('ui.popup.ban_title')} "
+            f"<span style='color:#b88; font-weight: normal;'>{t('ui.popup.ban_subtitle')}</span>"
+        )
+
+    def _on_lang(self) -> None:
+        self._retranslate()
+        if self._last_args:
+            self.set_candidates(*self._last_args)
 
     def set_candidates(
         self,
@@ -319,11 +339,9 @@ class _BanList(QFrame):
         profiles=None,
         map_tier: list[MapTierBan] | None = None,
     ) -> None:
-        # Top section: opponent-history bans.
+        self._last_args = (cands, profiles, map_tier)
         head_lines: list[str] = []
-        head_lines.append(
-            "<u style='color:#fbb;'>From enemy history</u>"
-        )
+        head_lines.append(f"<u style='color:#fbb;'>{t('ui.popup.ban_section_history')}</u>")
         if cands:
             for c in cands:
                 contrib = "  ·  ".join(
@@ -338,39 +356,31 @@ class _BanList(QFrame):
                 )
         else:
             if profiles:
-                head_lines.append(
-                    "<i style='color:#a88;'>No statistically strong signature heroes "
-                    "for these opponents yet — data is too thin.</i>"
-                )
+                head_lines.append(t("ui.popup.ban_empty_advisory"))
                 for p in profiles:
                     name = p.display_name or p.name_searched
                     if p.toon_handle == "":
                         head_lines.append(
                             f"&nbsp;&nbsp;• <b>{name}</b> — "
-                            "<span style='color:#a88;'>not in local DB</span>"
+                            + t("ui.popup.ban_player_not_in_db")
                         )
                     else:
                         head_lines.append(
                             f"&nbsp;&nbsp;• <b>{name}</b> — "
-                            f"<span style='color:#caa;'>{p.total_games} SL games seen</span>"
+                            + t("ui.popup.ban_player_games_seen", n=p.total_games)
                         )
             else:
-                head_lines.append(
-                    "<i style='color:#a88;'>no opponent data yet</i>"
-                )
+                head_lines.append(t("ui.popup.ban_empty_default"))
 
         # Bottom section: map-tier strong heroes our squad doesn't play.
         if map_tier:
             head_lines.append("")
-            head_lines.append(
-                "<u style='color:#fbb;'>Strong on this map "
-                "<span style='color:#a88; font-weight: normal;'>(and squad doesn't play)</span></u>"
-            )
+            head_lines.append(f"<u style='color:#fbb;'>{t('ui.popup.ban_section_map')}</u>")
             for c in map_tier:
                 squad_note = (
-                    "we never play"
+                    t("ui.popup.we_never_play")
                     if c.squad_games_on_hero == 0
-                    else f"we play {c.squad_games_on_hero}x"
+                    else t("ui.popup.we_play_n", n=c.squad_games_on_hero)
                 )
                 head_lines.append(
                     f"<b>{c.hero}</b> "
@@ -395,24 +405,38 @@ class _PickList(QFrame):
         )
         v = QVBoxLayout(self)
         v.setContentsMargins(10, 8, 10, 8)
-        title = QLabel("✅ Pick suggestions "
-                       "<span style='color:#9b9; font-weight: normal;'>strong on this map</span>")
-        title.setTextFormat(Qt.RichText)
-        title.setFont(QFont("", 11, QFont.Bold))
-        v.addWidget(title)
+        self.title_label = QLabel()
+        self.title_label.setTextFormat(Qt.RichText)
+        self.title_label.setFont(QFont("", 11, QFont.Bold))
+        v.addWidget(self.title_label)
         self._rows = QWidget()
         self._rows_layout = QVBoxLayout(self._rows)
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
         v.addWidget(self._rows)
+        self._last_cands: list[PickCandidate] = []
+        self._retranslate()
+        on_lang_change(lambda _c: self._on_lang())
+
+    def _retranslate(self) -> None:
+        self.title_label.setText(
+            f"{t('ui.popup.pick_title')} "
+            f"<span style='color:#9b9; font-weight: normal;'>{t('ui.popup.pick_subtitle')}</span>"
+        )
+
+    def _on_lang(self) -> None:
+        self._retranslate()
+        if self._last_cands is not None:
+            self.set_candidates(self._last_cands)
 
     def set_candidates(self, cands: list[PickCandidate]) -> None:
+        self._last_cands = list(cands)
         while self._rows_layout.count():
             item = self._rows_layout.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
         if not cands:
-            empty = QLabel("<i style='color:#9a9;'>no significantly strong picks on this map yet</i>")
+            empty = QLabel(t("ui.popup.pick_empty"))
             empty.setTextFormat(Qt.RichText)
             self._rows_layout.addWidget(empty)
             return
@@ -436,7 +460,7 @@ class _PickList(QFrame):
         head.addWidget(header)
         head.addStretch(1)
 
-        toggle = QPushButton("Build")
+        toggle = QPushButton(t("ui.popup.build_btn"))
         toggle.setCheckable(True)
         head.addWidget(toggle)
         v.addLayout(head)
@@ -450,7 +474,7 @@ class _PickList(QFrame):
 
     def _build_html(self, picks: list[TalentPick]) -> str:
         if not picks:
-            return "<i style='color:#9a9;'>no talent data</i>"
+            return t("ui.popup.no_talent_data")
         return "<br>".join(
             f"<b>T{tp.tier}</b> {tp.talent} "
             f"<span style='color:#9b9;'>{tp.wins}/{tp.games} "
@@ -469,7 +493,6 @@ class PopupWindow(QWidget):
     def __init__(self, store: Store) -> None:
         super().__init__()
         self.store = store
-        self.setWindowTitle("HotS Helper — Pre-game scout")
         self.setWindowFlags(
             Qt.Tool
             | Qt.WindowStaysOnTopHint
@@ -480,27 +503,27 @@ class PopupWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, False)
         self.setStyleSheet("background: rgba(20,20,20,240); color: #eee;")
         self._drag_pos = None
-        # Set by show_for_map(); used by 🎯 region-select buttons.
         self._screenshot_path = None
+        self._current_drafter = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
 
         # --- header ---------------------------------------------------------
         header = QHBoxLayout()
-        self.title = QLabel("Pre-game scout")
+        self.title = QLabel()
         self.title.setStyleSheet("font-size: 14pt; font-weight: 600;")
         header.addWidget(self.title)
         header.addStretch(1)
-        header.addWidget(QLabel("Map:"))
+        self.map_label = QLabel()
+        header.addWidget(self.map_label)
         self.map_edit = QLineEdit()
-        self.map_edit.setPlaceholderText("e.g. 奥特兰克战道")
         self.map_edit.setFixedWidth(180)
         self.map_edit.returnPressed.connect(self._run_analysis)
         header.addWidget(self.map_edit)
-        analyze_btn = QPushButton("Analyze all")
-        analyze_btn.clicked.connect(self._run_analysis)
-        header.addWidget(analyze_btn)
+        self.analyze_btn = QPushButton()
+        self.analyze_btn.clicked.connect(self._run_analysis)
+        header.addWidget(self.analyze_btn)
 
         close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
@@ -528,25 +551,43 @@ class PopupWindow(QWidget):
         # 5-ally | 5-enemy side-by-side
         players_row = QHBoxLayout()
         players_row.setSpacing(10)
-        self._ally_cards = self._make_column(players_row, "Allies (your team)", "#8cf")
-        self._enemy_cards = self._make_column(players_row, "Enemies", "#f88")
+        self._ally_col, self._ally_cards = self._make_column(
+            players_row, t("ui.popup.allies"), "#8cf"
+        )
+        self._enemy_col, self._enemy_cards = self._make_column(
+            players_row, t("ui.popup.enemies"), "#f88"
+        )
         body.addLayout(players_row)
 
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
 
-        footer = QLabel(
-            "<span style='color:#888;'>"
-            "Names come from OCR — edit any slot + press Enter or ↻ to re-query. "
-            "▼ expands a slot to every hero the player has used. "
-            "Storm League data only."
-            "</span>"
-        )
-        footer.setTextFormat(Qt.RichText)
-        footer.setWordWrap(True)
-        root.addWidget(footer)
+        self.footer_label = QLabel()
+        self.footer_label.setTextFormat(Qt.RichText)
+        self.footer_label.setWordWrap(True)
+        root.addWidget(self.footer_label)
 
         self.resize(1200, 840)
+        self._retranslate()
+        on_lang_change(lambda _c: self._retranslate())
+
+    def _retranslate(self) -> None:
+        # Window title and visible header.
+        self.setWindowTitle(t("ui.app.title") + " — " + t("ui.popup.title"))
+        if self._current_drafter:
+            self.title.setText(
+                t("ui.popup.title_drafting", name=self._current_drafter)
+            )
+        else:
+            self.title.setText(t("ui.popup.title"))
+        self.map_label.setText(t("ui.popup.map"))
+        self.map_edit.setPlaceholderText(t("ui.popup.map_placeholder"))
+        self.analyze_btn.setText(t("ui.popup.analyze"))
+        # Side column titles
+        if hasattr(self, "_ally_col"):
+            self._ally_col.title_label.setText(t("ui.popup.allies"))
+            self._enemy_col.title_label.setText(t("ui.popup.enemies"))
+        self.footer_label.setText(f"<span style='color:#888;'>{t('ui.popup.footer')}</span>")
 
     def _make_column(self, parent_layout: QHBoxLayout, title: str, accent: str) -> list[_PlayerCard]:
         col = QFrame()
@@ -559,6 +600,7 @@ class PopupWindow(QWidget):
         v.setSpacing(8)
         lbl = QLabel(title)
         lbl.setStyleSheet(f"color: {accent}; font-weight: 600; font-size: 11pt;")
+        col.title_label = lbl   # type: ignore[attr-defined]
         v.addWidget(lbl)
         cards: list[_PlayerCard] = []
         for _ in range(5):
@@ -572,7 +614,7 @@ class PopupWindow(QWidget):
             cards.append(card)
             v.addWidget(card)
         parent_layout.addWidget(col)
-        return cards
+        return col, cards
 
     # --- public API -----------------------------------------------------------
 
@@ -601,10 +643,11 @@ class PopupWindow(QWidget):
         # Drafter banner (the player currently picking) is shown in the title
         # bar so the user can copy-paste them into the right slot. We don't
         # auto-fill because we can't reliably guess which side they belong to.
+        self._current_drafter = drafter or ""
         if drafter:
-            self.title.setText(f"Pre-game scout — drafting: {drafter}")
+            self.title.setText(t("ui.popup.title_drafting", name=drafter))
         else:
-            self.title.setText("Pre-game scout")
+            self.title.setText(t("ui.popup.title"))
         self.show()
         self.raise_()
         if map_name or ally_names or enemy_names:
@@ -634,15 +677,15 @@ class PopupWindow(QWidget):
 
         if not self._screenshot_path:
             QMessageBox.information(
-                self, "No screenshot",
-                "No screenshot is associated with this popup. Trigger the "
-                "hotkey first so the app captures one.",
+                self,
+                t("ui.popup.region.no_screenshot_title"),
+                t("ui.popup.region.no_screenshot_body"),
             )
             return
         try:
             dlg = RegionSelectorDialog(self._screenshot_path, parent=self)
         except Exception as e:
-            QMessageBox.warning(self, "Cannot open region selector", str(e))
+            QMessageBox.warning(self, t("ui.popup.region.cannot_open"), str(e))
             return
 
         chosen: dict = {}
@@ -666,9 +709,9 @@ class PopupWindow(QWidget):
             self._requery_single(card)
         else:
             QMessageBox.information(
-                self, "No text recognized",
-                "OCR didn't find any text in that region. Try a tighter crop "
-                "or type the name manually.",
+                self,
+                t("ui.popup.region.no_text_title"),
+                t("ui.popup.region.no_text_body"),
             )
 
     def _refresh_bans(self) -> None:

@@ -23,6 +23,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QDialog, QLabel
 
+from ..i18n import t
+
 
 class RegionSelectorDialog(QDialog):
     """Show the screenshot fitted to the screen, let the user drag a rect."""
@@ -31,7 +33,7 @@ class RegionSelectorDialog(QDialog):
 
     def __init__(self, screenshot_path: Path, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Select player name region")
+        self.setWindowTitle(t("ui.popup.region.title"))
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setModal(True)
@@ -60,11 +62,7 @@ class RegionSelectorDialog(QDialog):
         self._origin: QPoint | None = None
         self._rect: QRect | None = None
 
-        self._hint = QLabel(
-            "Drag a tight rectangle over the player name. "
-            "Esc to cancel.",
-            self,
-        )
+        self._hint = QLabel(t("ui.popup.region.hint"), self)
         self._hint.setStyleSheet(
             "background: rgba(0,0,0,180); color: #fc6; padding: 6px 12px; "
             "border-radius: 6px; font-weight: 600;"

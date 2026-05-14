@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from ..config import Config, default_db_path as user_default_db_path
 from ..db import Store
+from ..i18n import set_language, t
 from .main_window import MainWindow
 
 
@@ -52,12 +53,14 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(True)
 
     config = Config.load()
+    set_language(getattr(config, "language", "zh") or "zh")
+
     db_path = _resolve_db_path()
     store = Store(db_path)
     print(f"[hots-ui] using database: {db_path}")
 
     window = MainWindow(store, config)
-    window._log(f"DB: {db_path}")
+    window._log(t("ui.main.db_path", path=db_path))
     window.show()
 
     rc = app.exec()

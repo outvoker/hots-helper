@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..db import Store
+from ..i18n import on_change as on_lang_change, t
 from ..stats import wilson_lower_bound
 
 
@@ -38,10 +39,10 @@ def _fmt_k(value: float) -> str:
     return f"{value:.0f}"
 
 
-# Display labels and the underlying mode string used in DB.
+# Mode keys (DB string + i18n label key).
 _MODES = [
-    ("天命乱斗 (ARAM)", "ARAM"),
-    ("风暴联赛 (Storm League)", "Storm League"),
+    ("ARAM", "ui.aram.mode_aram"),
+    ("Storm League", "ui.aram.mode_sl"),
 ]
 
 
@@ -52,28 +53,29 @@ class HeroRankingDialog(QDialog):
                  default_mode: str = "ARAM") -> None:
         super().__init__(parent)
         self.store = store
-        self.setWindowTitle("英雄强度榜")
         self.setMinimumSize(1180, 720)
         self.setStyleSheet("background:#161616; color:#eee;")
         self._default_mode = default_mode
         self._build_ui()
+        self._retranslate()
+        on_lang_change(lambda _c: self._on_lang())
         self._reload()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
         header = QHBoxLayout()
-        self.title = QLabel("英雄强度榜")
+        self.title = QLabel()
         self.title.setFont(QFont("", 14, QFont.Bold))
         self.title.setStyleSheet("color:#fc6;")
         header.addWidget(self.title)
         header.addStretch(1)
 
-        header.addWidget(QLabel("模式:"))
+        self.mode_label = QLabel()
+        header.addWidget(self.mode_label)
         self.mode_combo = QComboBox()
-        for label, value in _MODES:
-            self.mode_combo.addItem(label, value)
-        # Select default mode
+        for value, _label_key in _MODES:
+            self.mode_combo.addItem("", value)
         for i in range(self.mode_combo.count()):
             if self.mode_combo.itemData(i) == self._default_mode:
                 self.mode_combo.setCurrentIndex(i)
@@ -81,36 +83,34 @@ class HeroRankingDialog(QDialog):
         self.mode_combo.currentIndexChanged.connect(self._reload)
         header.addWidget(self.mode_combo)
 
-        header.addWidget(QLabel("最少局数:"))
+        self.min_games_label = QLabel()
+        header.addWidget(self.min_games_label)
         self.min_games_spin = QSpinBox()
         self.min_games_spin.setRange(1, 200)
         self.min_games_spin.setValue(5)
         self.min_games_spin.valueChanged.connect(self._reload)
         header.addWidget(self.min_games_spin)
 
-        header.addWidget(QLabel("排序:"))
+        self.sort_label = QLabel()
+        header.addWidget(self.sort_label)
         self.sort_combo = QComboBox()
-        self.sort_combo.addItem("胜率", "wr")
-        self.sort_combo.addItem("胜率（保守估计 WLB）", "wlb")
-        self.sort_combo.addItem("局数", "games")
-        self.sort_combo.addItem("英雄名", "hero")
-        self.sort_combo.setToolTip(
-            "「胜率」按真实胜率排，简单直观但小样本（如 5 局 5 胜 = 100%）容易排到顶；\n"
-            "「保守估计 WLB」会自动惩罚小样本，更适合做 BP 决策参考。"
-        )
+        self.sort_combo.addItem("", "wr")
+        self.sort_combo.addItem("", "wlb")
+        self.sort_combo.addItem("", "games")
+        self.sort_combo.addItem("", "hero")
         self.sort_combo.currentIndexChanged.connect(self._reload)
         header.addWidget(self.sort_combo)
 
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.close)
-        header.addWidget(close_btn)
+        self.close_btn = QPushButton()
+        self.close_btn.clicked.connect(self.close)
+        header.addWidget(self.close_btn)
         root.addLayout(header)
 
         # Search row
         search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("搜索英雄:"))
+        self.search_label = QLabel()
+        search_row.addWidget(self.search_label)
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("输入英雄名（支持部分匹配）")
         self.search_edit.textChanged.connect(self._on_search_changed)
         self.search_edit.returnPressed.connect(self._jump_to_match)
         search_row.addWidget(self.search_edit, 1)
@@ -137,23 +137,17 @@ class HeroRankingDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(False)
 
-        columns = [
-            ("排名", "right"),
-            ("英雄", "left"),
-            ("局数", "right"),
-            ("胜场", "right"),
-            ("胜率", "right"),
-            ("WLB", "right"),
-            ("K/D/A", "right"),
-            ("英雄伤害", "right"),
-            ("承受伤害", "right"),
-            ("治疗", "right"),
-            ("推塔", "right"),
-            ("XP", "right"),
+        # Column header keys; the labels are filled in via _retranslate.
+        self._column_keys = [
+            "ui.aram.col_rank", "ui.aram.col_hero",
+            "ui.aram.col_games", "ui.aram.col_wins",
+            "ui.aram.col_wr", "ui.aram.col_wlb",
+            "ui.aram.col_kda", "ui.aram.col_hero_dmg",
+            "ui.aram.col_dmg_taken", "ui.aram.col_healing",
+            "ui.aram.col_struct", "ui.aram.col_xp",
         ]
-        self.table.setColumnCount(len(columns))
-        self.table.setHorizontalHeaderLabels([c[0] for c in columns])
-        for i, (_, _) in enumerate(columns):
+        self.table.setColumnCount(len(self._column_keys))
+        for i in range(len(self._column_keys)):
             self.table.horizontalHeader().setSectionResizeMode(
                 i, QHeaderView.ResizeToContents
             )
@@ -162,22 +156,47 @@ class HeroRankingDialog(QDialog):
         )
         root.addWidget(self.table, 1)
 
-        footer = QLabel(
-            "<span style='color:#888;'>"
-            "<b>胜率</b>：实际胜场 ÷ 总局数。"
-            "<b>WLB</b>（Wilson 置信下界）：在 95% 置信度下真实胜率的最低估计值。"
-            "5 局 5 胜的胜率是 100% 但 WLB 只有 56%；70 局 50 胜（71%）的 WLB 是 60%。"
-            "BP 决策推荐看 WLB，避免小样本（比如 3 战 3 胜）误导。"
-            "</span>"
-        )
-        footer.setTextFormat(Qt.RichText)
-        footer.setWordWrap(True)
-        root.addWidget(footer)
+        self.footer_label = QLabel()
+        self.footer_label.setTextFormat(Qt.RichText)
+        self.footer_label.setWordWrap(True)
+        root.addWidget(self.footer_label)
+
+    def _retranslate(self) -> None:
+        self.setWindowTitle(t("ui.aram.window_title"))
+        self.mode_label.setText(t("ui.aram.mode"))
+        # Mode combo items
+        for i, (value, key) in enumerate(_MODES):
+            self.mode_combo.setItemText(i, t(key))
+        self.min_games_label.setText(t("ui.aram.min_games"))
+        self.sort_label.setText(t("ui.aram.sort"))
+        # Sort combo items
+        sort_keys = {
+            "wr": "ui.aram.sort_wr",
+            "wlb": "ui.aram.sort_wlb",
+            "games": "ui.aram.sort_games",
+            "hero": "ui.aram.sort_hero",
+        }
+        for i in range(self.sort_combo.count()):
+            key = sort_keys.get(self.sort_combo.itemData(i), "")
+            if key:
+                self.sort_combo.setItemText(i, t(key))
+        self.sort_combo.setToolTip(t("ui.aram.sort_tip"))
+        self.close_btn.setText(t("ui.aram.close"))
+        self.search_label.setText(t("ui.aram.search_label"))
+        self.search_edit.setPlaceholderText(t("ui.aram.search_placeholder"))
+        # Column headers
+        self.table.setHorizontalHeaderLabels([t(k) for k in self._column_keys])
+        # Footer
+        self.footer_label.setText(t("ui.aram.footer"))
+
+    def _on_lang(self) -> None:
+        self._retranslate()
+        self._reload()
 
     def _reload(self) -> None:
         mode = self.mode_combo.currentData()
         mode_label = self.mode_combo.currentText()
-        self.title.setText(f"{mode_label} 英雄强度榜")
+        self.title.setText(t("ui.aram.title", mode=mode_label))
 
         rows = self.store.conn.execute("""
             SELECT pm.hero,
@@ -234,8 +253,9 @@ class HeroRankingDialog(QDialog):
             JOIN replays r ON r.id = pm.replay_id WHERE r.mode = ?
         """, (mode,)).fetchone()[0]
         self.summary.setText(
-            f"数据库样本: {total_games} 局 {mode_label} (合计 {total_pm} 个英雄选用记录) · "
-            f"展示 {len(ranked)} 个英雄 (≥ {min_games} 局)"
+            t("ui.aram.summary",
+              games=total_games, mode=mode_label, pm=total_pm,
+              ranked=len(ranked), min_games=min_games)
         )
 
         self.table.setRowCount(len(ranked))
@@ -290,18 +310,11 @@ class HeroRankingDialog(QDialog):
         if not query.strip():
             self.match_label.setText("")
             return
-        if not matches:
-            self.match_label.setText(
-                f"<span style='color:#d99;'>无匹配</span>"
-            )
-            self.match_label.setTextFormat(Qt.RichText)
-            return
         self.match_label.setTextFormat(Qt.RichText)
-        self.match_label.setText(
-            f"<span style='color:#9d9;'>{len(matches)} 个匹配 — "
-            f"按回车跳转到第一个</span>"
-        )
-        # Auto-jump on the first match for instant feedback.
+        if not matches:
+            self.match_label.setText(t("ui.aram.no_match"))
+            return
+        self.match_label.setText(t("ui.aram.matches", n=len(matches)))
         self._jump_to_row(matches[0])
 
     def _jump_to_match(self) -> None:

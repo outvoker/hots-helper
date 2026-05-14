@@ -105,6 +105,8 @@ class Config:
     hotkey: str = "<ctrl>+<shift>+h"
     # If True, run the watcher in the background on UI start.
     auto_watch: bool = True
+    # UI locale, "zh" or "en".
+    language: str = "zh"
 
     @classmethod
     def load(cls) -> "Config":
@@ -119,6 +121,7 @@ class Config:
             recording_roots=list(raw.get("recording_roots") or []),
             hotkey=str(raw.get("hotkey") or "<ctrl>+<shift>+h"),
             auto_watch=bool(raw.get("auto_watch", True)),
+            language=str(raw.get("language") or "zh"),
         )
 
     @classmethod

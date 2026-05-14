@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from ..config import Config, default_hots_replay_roots, discover_replay_dirs
 from ..db import Store
+from ..i18n import available_languages, on_change as on_lang_change, set_language, t
 from ..watcher.ingest import IngestResult
 from .hotkey import HotkeyManager
 from .popup import PopupWindow
@@ -77,87 +79,103 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.store = store
         self.config = config
-        self.setWindowTitle("HotS Helper")
+        # Apply persisted language *before* we build any widgets.
+        set_language(getattr(config, "language", "zh") or "zh")
         self.resize(1000, 700)
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
+        # --- Top bar: language picker -----------------------------------------
+        top_bar = QHBoxLayout()
+        top_bar.addStretch(1)
+        self.lang_label = QLabel()
+        top_bar.addWidget(self.lang_label)
+        self.lang_combo = QComboBox()
+        for code, label in available_languages():
+            self.lang_combo.addItem(label, code)
+        for i in range(self.lang_combo.count()):
+            if self.lang_combo.itemData(i) == self.config.language:
+                self.lang_combo.setCurrentIndex(i)
+                break
+        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        top_bar.addWidget(self.lang_combo)
+        root.addLayout(top_bar)
+
         # --- Recording roots section ------------------------------------------
-        roots_box = QGroupBox("Replay folders")
-        rb = QVBoxLayout(roots_box)
+        self.roots_box = QGroupBox()
+        rb = QVBoxLayout(self.roots_box)
         self.roots_list = QListWidget()
         rb.addWidget(self.roots_list)
         btns = QHBoxLayout()
-        add_btn = QPushButton("Add folder…")
-        add_btn.clicked.connect(self._add_root)
-        remove_btn = QPushButton("Remove selected")
-        remove_btn.clicked.connect(self._remove_root)
-        detect_btn = QPushButton("Auto-detect")
-        detect_btn.clicked.connect(self._auto_detect)
-        btns.addWidget(add_btn)
-        btns.addWidget(remove_btn)
-        btns.addWidget(detect_btn)
+        self.add_btn = QPushButton()
+        self.add_btn.clicked.connect(self._add_root)
+        self.remove_btn = QPushButton()
+        self.remove_btn.clicked.connect(self._remove_root)
+        self.detect_btn = QPushButton()
+        self.detect_btn.clicked.connect(self._auto_detect)
+        btns.addWidget(self.add_btn)
+        btns.addWidget(self.remove_btn)
+        btns.addWidget(self.detect_btn)
         btns.addStretch(1)
         rb.addLayout(btns)
         self.effective_label = QLabel()
         self.effective_label.setStyleSheet("color:#888;")
         rb.addWidget(self.effective_label)
-        root.addWidget(roots_box)
+        root.addWidget(self.roots_box)
 
         # --- Actions section --------------------------------------------------
-        actions_box = QGroupBox("Ingest")
-        ab = QHBoxLayout(actions_box)
-        self.scan_btn = QPushButton("Start scan")
+        self.actions_box = QGroupBox()
+        ab = QHBoxLayout(self.actions_box)
+        self.scan_btn = QPushButton()
         self.scan_btn.clicked.connect(self._start_scan)
         ab.addWidget(self.scan_btn)
-        self.watch_chk = QCheckBox("Watch for new replays")
+        self.watch_chk = QCheckBox()
         self.watch_chk.setChecked(self.config.auto_watch)
         self.watch_chk.stateChanged.connect(self._toggle_watch)
         ab.addWidget(self.watch_chk)
         ab.addStretch(1)
         self.stats_label = QLabel("…")
         ab.addWidget(self.stats_label)
-        root.addWidget(actions_box)
+        root.addWidget(self.actions_box)
 
         # --- Hotkey section ---------------------------------------------------
-        hk_box = QGroupBox("Pre-game scout hotkey")
-        hb = QHBoxLayout(hk_box)
-        hb.addWidget(QLabel("Shortcut:"))
+        self.hk_box = QGroupBox()
+        hb = QHBoxLayout(self.hk_box)
+        self.shortcut_label = QLabel()
+        hb.addWidget(self.shortcut_label)
         self.hotkey_edit = QKeySequenceEdit()
         self.hotkey_edit.setKeySequence(_pynput_to_qt_seq(self.config.hotkey))
         hb.addWidget(self.hotkey_edit)
-        apply_btn = QPushButton("Apply")
-        apply_btn.clicked.connect(self._apply_hotkey)
-        hb.addWidget(apply_btn)
-        test_btn = QPushButton("Test popup")
-        test_btn.clicked.connect(self._test_popup)
-        hb.addWidget(test_btn)
+        self.apply_btn = QPushButton()
+        self.apply_btn.clicked.connect(self._apply_hotkey)
+        hb.addWidget(self.apply_btn)
+        self.test_btn = QPushButton()
+        self.test_btn.clicked.connect(self._test_popup)
+        hb.addWidget(self.test_btn)
         hb.addStretch(1)
-        root.addWidget(hk_box)
+        root.addWidget(self.hk_box)
 
         # --- Stats tools ------------------------------------------------------
-        tools_box = QGroupBox("英雄强度榜")
-        tb = QHBoxLayout(tools_box)
-        sl_btn = QPushButton("风暴联赛榜")
-        sl_btn.setToolTip("Storm League 各英雄的强度排行（基于本地数据库）")
-        sl_btn.clicked.connect(lambda: self._show_hero_ranking("Storm League"))
-        tb.addWidget(sl_btn)
-        aram_btn = QPushButton("天命乱斗榜")
-        aram_btn.setToolTip("ARAM 各英雄的强度排行（基于本地数据库）")
-        aram_btn.clicked.connect(lambda: self._show_hero_ranking("ARAM"))
-        tb.addWidget(aram_btn)
+        self.tools_box = QGroupBox()
+        tb = QHBoxLayout(self.tools_box)
+        self.sl_btn = QPushButton()
+        self.sl_btn.clicked.connect(lambda: self._show_hero_ranking("Storm League"))
+        tb.addWidget(self.sl_btn)
+        self.aram_btn = QPushButton()
+        self.aram_btn.clicked.connect(lambda: self._show_hero_ranking("ARAM"))
+        tb.addWidget(self.aram_btn)
         tb.addStretch(1)
-        root.addWidget(tools_box)
+        root.addWidget(self.tools_box)
 
         # --- Log --------------------------------------------------------------
-        log_box = QGroupBox("Activity")
-        lb = QVBoxLayout(log_box)
+        self.log_box = QGroupBox()
+        lb = QVBoxLayout(self.log_box)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         lb.addWidget(self.log)
-        root.addWidget(log_box, 1)
+        root.addWidget(self.log_box, 1)
 
         # --- Runtime: store, workers, hotkey, popup --------------------------
         self._scan_thread: QThread | None = None
@@ -168,7 +186,13 @@ class MainWindow(QMainWindow):
         self.watch_worker = WatchWorker(self.store)
         self.watch_worker.ingested.connect(self._on_watch_ingested)
         self.watch_worker.started_watching.connect(self._on_watch_started)
-        self.watch_worker.stopped.connect(lambda: self._log("Watcher stopped."))
+        self.watch_worker.stopped.connect(
+            lambda: self._log(t("ui.main.watcher_stopped"))
+        )
+
+        # Apply translations to all UI text.
+        self._retranslate()
+        on_lang_change(lambda _code: self._retranslate())
 
         # Hotkey-triggered screenshot+OCR runs on its own QThread so the UI
         # stays responsive even when Windows OCR takes a couple of seconds.
@@ -187,9 +211,55 @@ class MainWindow(QMainWindow):
         self._refresh_stats()
         if self.config.hotkey:
             self.hotkey.set_hotkey(self.config.hotkey)
-            self._log(f"Hotkey registered: {self.config.hotkey}")
+            self._log(t("ui.main.hotkey_registered", combo=self.config.hotkey))
         if self.watch_chk.isChecked():
             self._start_watching()
+
+    # --- i18n ---------------------------------------------------------------
+
+    def _retranslate(self) -> None:
+        """Push the current locale's strings into every visible widget.
+
+        Called once after __init__ wires up widgets, then again whenever
+        the user picks a new language. Anything that contains user-facing
+        text needs to be re-set here.
+        """
+        self.setWindowTitle(t("ui.app.title"))
+        self.lang_label.setText(t("ui.main.language") + ":")
+
+        self.roots_box.setTitle(t("ui.main.replay_folders"))
+        self.add_btn.setText(t("ui.main.add_folder"))
+        self.remove_btn.setText(t("ui.main.remove_selected"))
+        self.detect_btn.setText(t("ui.main.auto_detect"))
+
+        self.actions_box.setTitle(t("ui.main.ingest"))
+        self.scan_btn.setText(t("ui.main.start_scan"))
+        self.watch_chk.setText(t("ui.main.watch"))
+
+        self.hk_box.setTitle(t("ui.main.hotkey_section"))
+        self.shortcut_label.setText(t("ui.main.shortcut"))
+        self.apply_btn.setText(t("ui.main.apply"))
+        self.test_btn.setText(t("ui.main.test_popup"))
+
+        self.tools_box.setTitle(t("ui.main.tools"))
+        self.sl_btn.setText(t("ui.main.sl_ranking"))
+        self.sl_btn.setToolTip(t("ui.main.sl_ranking_tip"))
+        self.aram_btn.setText(t("ui.main.aram_ranking"))
+        self.aram_btn.setToolTip(t("ui.main.aram_ranking_tip"))
+
+        self.log_box.setTitle(t("ui.main.activity"))
+
+        # Refresh derived labels that include translated text.
+        self._refresh_roots()
+        self._refresh_stats()
+
+    def _on_language_changed(self) -> None:
+        code = self.lang_combo.currentData()
+        if not code:
+            return
+        set_language(code)
+        self.config.language = code
+        self.config.save()
 
     # --- logging -------------------------------------------------------------
 
@@ -205,22 +275,20 @@ class MainWindow(QMainWindow):
         effective = self.config.effective_replay_dirs()
         if effective:
             self.effective_label.setText(
-                f"{len(effective)} replay folder(s) resolved:\n"
+                t("ui.main.folders_resolved", n=len(effective)) + "\n"
                 + "\n".join(f"  • {d}" for d in effective)
             )
         else:
-            self.effective_label.setText(
-                "No replay folders resolved yet. Click 'Auto-detect' or 'Add folder…'."
-            )
+            self.effective_label.setText(t("ui.main.no_folders_resolved"))
 
     def _add_root(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Select a HotS folder")
+        d = QFileDialog.getExistingDirectory(self, t("ui.main.replay_folders"))
         if d:
             if d not in self.config.recording_roots:
                 self.config.recording_roots.append(d)
                 self.config.save()
                 self._refresh_roots()
-                self._log(f"Added folder: {d}")
+                self._log(t("ui.main.added_folder", path=d))
 
     def _remove_root(self) -> None:
         for item in self.roots_list.selectedItems():
@@ -237,9 +305,9 @@ class MainWindow(QMainWindow):
         if found_any:
             self.config.save()
             self._refresh_roots()
-            self._log("Auto-detect: added standard HotS folder(s).")
+            self._log(t("ui.main.autodetect_added"))
         else:
-            self._log("Auto-detect: nothing new found.")
+            self._log(t("ui.main.autodetect_none"))
 
     # --- scan ----------------------------------------------------------------
 
@@ -248,7 +316,11 @@ class MainWindow(QMainWindow):
             return
         dirs = self.config.effective_replay_dirs()
         if not dirs:
-            QMessageBox.warning(self, "No folders", "Add at least one folder first.")
+            QMessageBox.warning(
+                self,
+                t("ui.main.no_folders_warn_title"),
+                t("ui.main.no_folders_warn_body"),
+            )
             return
         self.scan_btn.setEnabled(False)
         self._scan_thread = QThread(self)
@@ -260,7 +332,7 @@ class MainWindow(QMainWindow):
         self._scan_worker.finished.connect(self._scan_thread.quit)
         self._scan_thread.finished.connect(self._cleanup_scan_thread)
         self._scan_thread.start()
-        self._log(f"Scanning {len(dirs)} folder(s)…")
+        self._log(t("ui.main.scanning", n=len(dirs)))
 
     def _cleanup_scan_thread(self) -> None:
         if self._scan_worker is not None:
@@ -280,7 +352,7 @@ class MainWindow(QMainWindow):
             self._log(f"[~] {result.path.name}  (duplicate perspective of an existing match)")
 
     def _on_scan_finished(self, new: int, skipped: int, errors: int) -> None:
-        self._log(f"Scan done: {new} new, {skipped} already ingested, {errors} errors.")
+        self._log(t("ui.main.scan_done", new=new, dup=skipped, err=errors))
         self._refresh_stats()
 
     # --- watcher -------------------------------------------------------------
@@ -301,7 +373,7 @@ class MainWindow(QMainWindow):
         self.watch_worker.start(dirs)
 
     def _on_watch_started(self, dirs: list) -> None:
-        self._log(f"Watcher active on {len(dirs)} folder(s).")
+        self._log(t("ui.main.watcher_active", n=len(dirs)))
 
     def _on_watch_ingested(self, result: IngestResult) -> None:
         if result.error:
@@ -317,12 +389,16 @@ class MainWindow(QMainWindow):
     def _apply_hotkey(self) -> None:
         combo = _qt_seq_to_pynput(self.hotkey_edit.keySequence())
         if not combo:
-            QMessageBox.warning(self, "Invalid", "Please enter a key combination.")
+            QMessageBox.warning(
+                self,
+                t("ui.main.invalid_hotkey_title"),
+                t("ui.main.invalid_hotkey_body"),
+            )
             return
         self.config.hotkey = combo
         self.config.save()
         self.hotkey.set_hotkey(combo)
-        self._log(f"Hotkey set to: {combo}")
+        self._log(t("ui.main.hotkey_set", combo=combo))
 
     def _test_popup(self) -> None:
         self._on_hotkey()
@@ -352,10 +428,10 @@ class MainWindow(QMainWindow):
         # Reentry guard: if the user spams the hotkey while OCR is running
         # we'd queue up multiple worker threads and confuse winrt.
         if self._hotkey_busy:
-            self._log("Hotkey ignored — previous capture still running.")
+            self._log(t("ui.main.hotkey_busy"))
             return
         self._hotkey_busy = True
-        self._log("Capturing screenshot…")
+        self._log(t("ui.main.capturing_screenshot"))
 
         thread = QThread(self)
         worker = HotkeyWorker()
@@ -389,7 +465,7 @@ class MainWindow(QMainWindow):
         enemy_conf = result.enemy_confidences if any(result.enemy_confidences) else None
 
         if result.drafter:
-            self._log(f"Currently drafting: {result.drafter}")
+            self._log(t("ui.main.drafting", name=result.drafter))
 
         self.popup.show_for_map(
             map_name,
@@ -406,11 +482,12 @@ class MainWindow(QMainWindow):
     def _refresh_stats(self) -> None:
         try:
             self.stats_label.setText(
-                f"DB: {self.store.count_replays()} replays · "
-                f"{self.store.count_players()} players"
+                t("ui.main.db_summary",
+                  replays=self.store.count_replays(),
+                  players=self.store.count_players())
             )
         except Exception as e:
-            self.stats_label.setText(f"DB error: {e}")
+            self.stats_label.setText(t("ui.main.db_error", e=e))
 
     # --- close ---------------------------------------------------------------
 
