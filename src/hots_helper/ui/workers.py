@@ -198,6 +198,16 @@ class HotkeyWorker(QObject):
                 self.progress.emit(
                     f"[2/3] OCR done — {len(blocks)} text blocks ({dt:.1f}s)"
                 )
+                # Dump every recognized block so the user can paste the log
+                # to debug missed slots. Sorted top-to-bottom for readability.
+                for b in sorted(blocks, key=lambda b: b.bbox[1]):
+                    x0, y0, x1, y1 = b.bbox
+                    cx = (x0 + x1) / 2
+                    cy = (y0 + y1) / 2
+                    log_lines.append(
+                        f"      block cx={cx:.3f} cy={cy:.3f} "
+                        f"conf={b.confidence:.2f} {b.text!r}"
+                    )
             except Exception as e:
                 log_lines.append(f"[2/3 OCR error] {type(e).__name__}: {e}")
                 log_lines.append(traceback.format_exc())
