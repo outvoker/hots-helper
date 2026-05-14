@@ -227,6 +227,13 @@ class CloudSync:
         # so the next call only sends new rows.
         watermark = _read_watermark()
 
+        # All push queries filter ``file_hash NOT LIKE 'cloud:%'`` — cloud-
+        # pulled replays carry a synthetic file_hash of ``cloud:<match_key>``
+        # while locally-ingested ones carry a real SHA-256. Without this
+        # filter, every launch after a fresh pull would re-upload the
+        # ~7000 rows we just downloaded (the server upserts so data
+        # doesn't change, but it's a pointless ~10MB round-trip).
+
         pushed_r = self._push_table(
             table="replays",
             columns=_REPLAY_COLUMNS,
@@ -236,6 +243,7 @@ class CloudSync:
                        bans_team0, bans_team1
                 FROM replays
                 WHERE played_at > ?
+                  AND file_hash NOT LIKE 'cloud:%'
                 ORDER BY played_at
             """,
             since=watermark.get("push_replays", "1970-01-01T00:00:00+00:00"),
@@ -245,14 +253,25 @@ class CloudSync:
             watermark=watermark, watermark_key="push_replays",
         )
 
+        # ``players`` has no direct origin column. Push only those who
+        # have at least one *local-origin* match — i.e. someone we've
+        # actually seen via a replay we ingested. Players that came in
+        # purely from a cloud pull get skipped (they're already on the
+        # server by definition).
         pushed_p = self._push_table(
             table="players",
             columns=_PLAYER_COLUMNS,
             local_query="""
-                SELECT toon_handle, display_name, last_seen_at
-                FROM players
-                WHERE last_seen_at > ?
-                ORDER BY last_seen_at
+                SELECT p.toon_handle, p.display_name, p.last_seen_at
+                FROM players p
+                WHERE p.last_seen_at > ?
+                  AND EXISTS (
+                    SELECT 1 FROM player_match pm
+                    JOIN replays r ON r.id = pm.replay_id
+                    WHERE pm.toon_handle = p.toon_handle
+                      AND r.file_hash NOT LIKE 'cloud:%'
+                  )
+                ORDER BY p.last_seen_at
             """,
             since=watermark.get("push_players", "1970-01-01T00:00:00+00:00"),
             since_field="last_seen_at",
@@ -340,6 +359,7 @@ class CloudSync:
                 JOIN replays r ON r.id = pm.replay_id
                 WHERE r.played_at > ?
                   AND r.match_key != ''
+                  AND r.file_hash NOT LIKE 'cloud:%'
                 ORDER BY r.played_at
             """, (since,)).fetchall()
         except Exception as e:
