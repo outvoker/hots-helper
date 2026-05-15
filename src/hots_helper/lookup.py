@@ -223,13 +223,17 @@ def _summarize(
             relaxed.sort(key=lambda h: (-wilson_lower_bound(h.wins, h.games), -h.games))
             bans = relaxed[:3]
 
-        # Map-specific hero usage.
+        # Map-specific hero usage. Sorted by win-rate (then game count for
+        # tiebreaks) so the popup can show "this player wins most often
+        # on this map with hero X" at the top — that's the question the
+        # user is actually asking when they look at a per-map breakdown.
         map_heroes: list[HeroUsage] = []
         if map_name:
             map_heroes = [
                 _hero_usage_from_row(r)
                 for r in store.hero_stats_for_handle(handle, map_name=map_name)
-            ][:top_n_heroes]
+            ]
+            map_heroes.sort(key=lambda h: (-h.winrate, -h.games))
 
         # Teammates / opponents (sample of frequent ones).
         teammates = [

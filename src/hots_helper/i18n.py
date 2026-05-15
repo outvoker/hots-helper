@@ -51,6 +51,73 @@ _translations: dict[str, dict[str, str]] = {
     "ui.main.apply": {"zh": "应用", "en": "Apply"},
     "ui.main.test_popup": {"zh": "测试弹窗", "en": "Test popup"},
 
+    # Primary feature cards on the main window.
+    "ui.main.bp_card_title": {
+        "zh": "BP 智能分析",
+        "en": "Pre-game BP intelligence",
+    },
+    "ui.main.bp_card_subtitle": {
+        "zh": "BP 阶段按下快捷键 → 自动截图、识别队伍、调取队伍历史数据，"
+              "给出 ban/pick/天赋建议。",
+        "en": "Press the hotkey during BP — the app captures the screen, "
+              "OCRs both teams, mines squad history, and recommends "
+              "bans, picks and talents.",
+    },
+    "ui.main.bp_card_cta": {"zh": "立即测试 (无需对局)", "en": "Test now (no game needed)"},
+    "ui.main.ranking_card_title": {
+        "zh": "英雄强度榜",
+        "en": "Hero strength rankings",
+    },
+    "ui.main.ranking_card_subtitle": {
+        "zh": "基于本地数据库统计每个英雄在风暴联赛 / 天命乱斗的胜率与综合表现，"
+              "支持按地图、保守胜率、局数排序。",
+        "en": "Per-hero win-rate and performance for SL and ARAM, "
+              "filterable by map and sortable by conservative win-rate.",
+    },
+    "ui.main.settings": {"zh": "高级设置（录像、扫描、同步）", "en": "Advanced settings (replays, scan, sync)"},
+
+    # === Capture progress dialog ========================================
+    "ui.capture.title": {
+        "zh": "BP 智能分析进行中…",
+        "en": "Running BP intelligence…",
+    },
+    "ui.capture.step_capture": {
+        "zh": "正在截取全屏画面…",
+        "en": "Capturing fullscreen frame…",
+    },
+    "ui.capture.step_ocr": {
+        "zh": "调用系统 OCR 引擎识别队伍名称…",
+        "en": "Running system OCR over team panels…",
+    },
+    "ui.capture.step_parse": {
+        "zh": "解析 BP 布局并对齐到 5v5 槽位…",
+        "en": "Parsing BP layout and aligning to 5v5 slots…",
+    },
+    "ui.capture.step_resolve": {
+        "zh": "在本地数据库中匹配玩家档案…",
+        "en": "Resolving players against the squad database…",
+    },
+    "ui.capture.step_score": {
+        "zh": "运行胜率模型 · 计算保守置信下界…",
+        "en": "Running win-rate model · computing Wilson lower bounds…",
+    },
+    "ui.capture.step_render": {
+        "zh": "汇总 ban / pick / 天赋建议…",
+        "en": "Aggregating ban / pick / talent recommendations…",
+    },
+    "ui.capture.sub_first": {
+        "zh": "首次运行可能稍慢，模型会缓存到内存里。",
+        "en": "First run is a bit slower; the model is being cached.",
+    },
+    "ui.capture.done": {
+        "zh": "✓ 分析完成，正在打开侦查窗口…",
+        "en": "✓ Analysis complete — opening scout window…",
+    },
+    "ui.capture.failed": {
+        "zh": "分析失败，请查看运行日志。",
+        "en": "Capture failed — see Activity log.",
+    },
+
     "ui.main.tools": {"zh": "英雄强度榜", "en": "Hero ranking"},
     "ui.main.sl_ranking": {"zh": "风暴联赛榜", "en": "Storm League ranking"},
     "ui.main.aram_ranking": {"zh": "天命乱斗榜", "en": "ARAM ranking"},
@@ -227,6 +294,14 @@ _translations: dict[str, dict[str, str]] = {
         "en": "<span style='color:#888;'>no hero usage in Storm League yet</span>",
     },
     "ui.popup.card.heroes_used": {"zh": "曾使用英雄", "en": "Heroes used"},
+    "ui.popup.card.heroes_used_on_map": {
+        "zh": "本地图曾使用英雄（按胜率排序）",
+        "en": "Heroes used on this map (by win-rate)",
+    },
+    "ui.popup.card.heroes_used_all": {
+        "zh": "全部地图曾使用英雄",
+        "en": "Heroes used (all maps)",
+    },
     "ui.popup.card.more_heroes": {
         "zh": "<span style='color:#888;'>&nbsp;&nbsp;（还有 {n} 个英雄 — 点 ▼ 展开）</span>",
         "en": "<span style='color:#888;'>&nbsp;&nbsp;(+{n} more heroes — click ▼ to expand)</span>",
@@ -283,14 +358,14 @@ _translations: dict[str, dict[str, str]] = {
     "ui.aram.min_games": {"zh": "最少局数：", "en": "Minimum games:"},
     "ui.aram.sort": {"zh": "排序：", "en": "Sort by:"},
     "ui.aram.sort_wr": {"zh": "胜率", "en": "Win-rate"},
-    "ui.aram.sort_wlb": {"zh": "胜率（保守估计 WLB）", "en": "Win-rate (conservative, WLB)"},
+    "ui.aram.sort_wlb": {"zh": "保守胜率（推荐）", "en": "Conservative win-rate (recommended)"},
     "ui.aram.sort_games": {"zh": "局数", "en": "Games"},
     "ui.aram.sort_hero": {"zh": "英雄名", "en": "Hero name"},
     "ui.aram.sort_tip": {
-        "zh": "「胜率」按真实胜率排，简单直观但小样本（如 5 局 5 胜 = 100%）容易排到顶；\n"
-              "「保守估计 WLB」会自动惩罚小样本，更适合做 BP 决策参考。",
-        "en": "'Win-rate' is the simple ratio, but a tiny sample (e.g. 5/5 = 100%) jumps to the top.\n"
-              "'Conservative WLB' (Wilson 95% lower bound) penalises small samples, better for BP decisions.",
+        "zh": "「胜率」=  胜场 ÷ 局数，最直观；但样本小的英雄（5 局 5 胜 = 100%）会排到最顶。\n"
+              "「保守胜率」对小样本打折扣（数学上是 95% 置信下界）；BP 时按这个排更靠谱。",
+        "en": "'Win-rate' is the simple ratio (wins ÷ games); a hero with only 5/5 still jumps to 100%.\n"
+              "'Conservative win-rate' discounts small samples (95% lower bound); recommended for BP.",
     },
     "ui.aram.close": {"zh": "关闭", "en": "Close"},
     "ui.aram.search_label": {"zh": "搜索英雄：", "en": "Search hero:"},
@@ -311,8 +386,8 @@ _translations: dict[str, dict[str, str]] = {
     "ui.aram.col_hero": {"zh": "英雄", "en": "Hero"},
     "ui.aram.col_games": {"zh": "局数", "en": "Games"},
     "ui.aram.col_wins": {"zh": "胜场", "en": "Wins"},
-    "ui.aram.col_wr": {"zh": "胜率", "en": "WR"},
-    "ui.aram.col_wlb": {"zh": "WLB", "en": "WLB"},
+    "ui.aram.col_wr": {"zh": "胜率", "en": "Win-rate"},
+    "ui.aram.col_wlb": {"zh": "保守胜率", "en": "Conservative WR"},
     "ui.aram.col_kda": {"zh": "K/D/A", "en": "K/D/A"},
     "ui.aram.col_hero_dmg": {"zh": "英雄伤害", "en": "Hero dmg"},
     "ui.aram.col_dmg_taken": {"zh": "承受伤害", "en": "Dmg taken"},
@@ -321,16 +396,14 @@ _translations: dict[str, dict[str, str]] = {
     "ui.aram.col_xp": {"zh": "XP", "en": "XP"},
     "ui.aram.footer": {
         "zh": "<span style='color:#888;'>"
-              "<b>胜率</b>：实际胜场 ÷ 总局数。"
-              "<b>WLB</b>（Wilson 置信下界）：在 95% 置信度下真实胜率的最低估计值。"
-              "5 局 5 胜的胜率是 100% 但 WLB 只有 56%；70 局 50 胜（71%）的 WLB 是 60%。"
-              "BP 决策推荐看 WLB，避免小样本（比如 3 战 3 胜）误导。"
+              "<b>胜率</b> = 胜场 ÷ 局数；"
+              "<b>保守胜率</b> 会对小样本打折扣（5 局 5 胜的胜率是 100% 但保守胜率只有 56%；"
+              "70 局 50 胜（71%）的保守胜率是 60%）。BP 时按保守胜率排序更靠谱，避免被「3 战 3 胜」之类的小样本误导。"
               "</span>",
         "en": "<span style='color:#888;'>"
-              "<b>WR</b> = wins / games. "
-              "<b>WLB</b> = Wilson 95% lower bound on the true winrate. "
-              "5/5 = 100% WR but only 56% WLB; 50/70 (71%) is 60% WLB. "
-              "Sort by WLB for BP decisions to avoid being misled by small samples like 3/3."
+              "<b>Win-rate</b> = wins ÷ games. "
+              "<b>Conservative win-rate</b> discounts small samples: a hero with 5/5 has 100% WR but only 56% conservative; "
+              "50/70 (71%) becomes 60% conservative. Sort by conservative WR for BP to avoid being misled by tiny samples like 3/3."
               "</span>",
     },
 }

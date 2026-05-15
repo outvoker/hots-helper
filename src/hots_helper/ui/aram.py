@@ -106,8 +106,12 @@ class HeroRankingDialog(QDialog):
         self.sort_label = QLabel()
         header.addWidget(self.sort_label)
         self.sort_combo = QComboBox()
-        self.sort_combo.addItem("", "wr")
+        # WLB ("conservative win-rate") is first so it's the default —
+        # it's the right metric for BP decisions, since plain win-rate
+        # over-promotes any hero a single player happens to have a 5/5
+        # streak on.
         self.sort_combo.addItem("", "wlb")
+        self.sort_combo.addItem("", "wr")
         self.sort_combo.addItem("", "games")
         self.sort_combo.addItem("", "hero")
         self.sort_combo.currentIndexChanged.connect(self._reload)

@@ -144,13 +144,33 @@ def _summary_body_html(summary: PlayerSummary, expanded: bool) -> str:
             + "</span>"
         )
 
+    # Per-map heroes first (when a map is in scope) — highest-winrate at
+    # the top so the user can see "this player wins on this map with
+    # hero X". Then the all-maps list below for context.
+    if summary.map_heroes:
+        shown_map = summary.map_heroes if expanded else summary.map_heroes[:3]
+        parts.append(f"<u>{t('ui.popup.card.heroes_used_on_map')}</u>")
+        for h in shown_map:
+            parts.append("&nbsp;&nbsp;• " + _hero_line(h))
+        remaining_map = len(summary.map_heroes) - len(shown_map)
+        if not expanded and remaining_map > 0:
+            parts.append(t("ui.popup.card.more_heroes", n=remaining_map))
+
     heroes = summary.signature_heroes
     if not heroes:
-        parts.append(t("ui.popup.card.no_hero_usage"))
+        if not summary.map_heroes:
+            parts.append(t("ui.popup.card.no_hero_usage"))
         return "<br>".join(parts)
 
     shown = heroes if expanded else heroes[:3]
-    parts.append(f"<u>{t('ui.popup.card.heroes_used')}</u>")
+    # When map_heroes is also present, label this section as the
+    # all-maps fallback so the two lists don't look like duplicates.
+    section_key = (
+        "ui.popup.card.heroes_used_all"
+        if summary.map_heroes
+        else "ui.popup.card.heroes_used"
+    )
+    parts.append(f"<u>{t(section_key)}</u>")
     for h in shown:
         parts.append("&nbsp;&nbsp;• " + _hero_line(h))
     remaining = len(heroes) - len(shown)
@@ -373,13 +393,14 @@ class _BanList(QFrame):
         if cands:
             for c in cands:
                 contrib = "  ·  ".join(
-                    f"{name} <span style='color:#daa;'>{w}/{g} ({(w/g*100 if g else 0):.0f}%)</span>"
+                    f"{name} <span style='color:#daa;'>{w}/{g} 胜（{(w/g*100 if g else 0):.0f}%）</span>"
                     for name, g, w, _ in c.contributors
                 )
                 head_lines.append(
                     f"<b>{c.hero}</b> "
-                    f"<span style='color:#caa;'>score {c.score:.2f} · "
-                    f"combined {c.total_wins}/{c.total_games} ({c.combined_wr*100:.0f}%)</span>"
+                    f"<span style='color:#caa;'>"
+                    f"敌方共 {c.total_wins}/{c.total_games} 胜（{c.combined_wr*100:.0f}%）"
+                    f"</span>"
                     f"<br>&nbsp;&nbsp;&nbsp;&nbsp;{contrib}"
                 )
         else:
@@ -412,9 +433,9 @@ class _BanList(QFrame):
                 )
                 head_lines.append(
                     f"<b>{c.hero}</b> "
-                    f"<span style='color:#caa;'>{c.map_wins}/{c.map_games} "
-                    f"WR {c.map_winrate*100:.0f}% · WLB {c.map_wilson_lb*100:.0f}% · "
-                    f"{squad_note}</span>"
+                    f"<span style='color:#caa;'>本图 {c.map_wins}/{c.map_games} 胜（"
+                    f"胜率 {c.map_winrate*100:.0f}%，保守胜率 {c.map_wilson_lb*100:.0f}%）"
+                    f" · {squad_note}</span>"
                 )
         self.body.setText("<br>".join(head_lines))
 
@@ -484,11 +505,21 @@ class _PickList(QFrame):
 
         head = QHBoxLayout()
         sig = "✓ " if c.significant else ""
+        # Plain-language summary: actual win-rate, conservative win-rate
+        # (≥ 50% only if the lower confidence bound is solid), and how
+        # much better than the global average this hero is on this map.
+        # The previous "lift … pp · p=…" notation was technically
+        # accurate but unreadable for non-statistician squad members.
+        lift_text = (
+            f"比平均高 {c.lift_pp:+.0f}%"
+            if abs(c.lift_pp) >= 0.5 else "与平均持平"
+        )
+        sig_note = "（统计显著）" if c.significant else ""
         header = QLabel(
             f"<b>{sig}{c.hero}</b> "
-            f"<span style='color:#9b9;'>{c.map_wins}/{c.map_games} "
-            f"WR {c.map_winrate*100:.0f}% · WLB {c.map_wilson_lb*100:.0f}% · "
-            f"lift {c.lift_pp:+.0f}pp · p={c.p_value:.2f}</span>"
+            f"<span style='color:#9b9;'>本图 {c.map_wins}/{c.map_games} 胜（"
+            f"胜率 {c.map_winrate*100:.0f}%，保守胜率 {c.map_wilson_lb*100:.0f}%）"
+            f" · {lift_text}{sig_note}</span>"
         )
         header.setTextFormat(Qt.RichText)
         head.addWidget(header)
@@ -511,9 +542,10 @@ class _PickList(QFrame):
             return t("ui.popup.no_talent_data")
         return "<br>".join(
             f"<b>T{tp.tier}</b> {talent_label(tp.talent)} "
-            f"<span style='color:#9b9;'>{tp.wins}/{tp.games} "
-            f"WR {(tp.wins/tp.games*100 if tp.games else 0):.0f}% · "
-            f"WLB {tp.wilson_lb*100:.0f}% · pick {tp.pick_rate*100:.0f}%</span>"
+            f"<span style='color:#9b9;'>{tp.wins}/{tp.games} 胜 "
+            f"（胜率 {(tp.wins/tp.games*100 if tp.games else 0):.0f}%，"
+            f"保守胜率 {tp.wilson_lb*100:.0f}%，"
+            f"选取率 {tp.pick_rate*100:.0f}%）</span>"
             for tp in picks
         )
 
@@ -996,9 +1028,14 @@ class PopupWindow(QWidget):
             picks = []
         self.pick_panel.set_candidates(picks)
 
-        # Per-card lookups. Only query cards with names.
+        # Per-card lookups. Only query cards with names. Pass the
+        # current map so each PlayerSummary gets a map_heroes list to
+        # render alongside the all-maps signature.
         names = [n for n in (ally_names + enemy_names) if n]
-        summaries = lookup_players(self.store, names) if names else {}
+        summaries = (
+            lookup_players(self.store, names, map_name=map_name)
+            if names else {}
+        )
         for cards in (self._ally_cards, self._enemy_cards):
             for card in cards:
                 if not card.name:
@@ -1012,7 +1049,11 @@ class PopupWindow(QWidget):
             card.clear()
             self._run_analysis()  # picks/bans may change when a slot clears
             return
-        summaries = lookup_players(self.store, [name]).get(name, [])
+        map_name = self.map_edit.currentText().strip() or None
+        summaries = (
+            lookup_players(self.store, [name], map_name=map_name)
+            .get(name, [])
+        )
         card.set_summaries(summaries)
         # A single-card correction may shift the ban list (any side change
         # can affect map-tier bans through ally squad detection).

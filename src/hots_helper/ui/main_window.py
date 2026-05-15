@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QKeySequenceEdit,
@@ -20,7 +22,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -31,8 +35,21 @@ from ..i18n import available_languages, on_change as on_lang_change, set_languag
 from ..sync import make_sync
 from ..sync_defaults import DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL
 from ..watcher.ingest import IngestResult
+from .capture_progress import CaptureProgressDialog
 from .hotkey import HotkeyManager
 from .popup import PopupWindow
+from .theme import (
+    BG_DEEP,
+    BG_ELEVATED,
+    BG_HOVER,
+    BG_INPUT,
+    GOLD,
+    GOLD_BRIGHT,
+    GOLD_DIM,
+    LINE,
+    TEXT,
+    TEXT_DIM,
+)
 from .workers import HotkeyShotResult, HotkeyWorker, ScanWorker, SyncWorker, WatchWorker
 
 
@@ -89,6 +106,8 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(14, 10, 14, 10)
+        root.setSpacing(12)
 
         # --- Top bar: language picker -----------------------------------------
         top_bar = QHBoxLayout()
@@ -106,10 +125,45 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.lang_combo)
         root.addLayout(top_bar)
 
+        # =====================================================================
+        # PRIMARY FEATURES — two big "hero cards" side by side. These are the
+        # things squad members open the app for; everything else is config.
+        # =====================================================================
+        primary_row = QHBoxLayout()
+        primary_row.setSpacing(12)
+        primary_row.addWidget(self._build_bp_card(), 1)
+        primary_row.addWidget(self._build_ranking_card(), 1)
+        root.addLayout(primary_row)
+
+        # =====================================================================
+        # SETTINGS — collapsible group containing replay folders, scan/watch,
+        # cloud sync, etc. Closed by default so the hero cards have room.
+        # =====================================================================
+        self.settings_toggle = QToolButton()
+        self.settings_toggle.setCheckable(True)
+        self.settings_toggle.setChecked(False)
+        self.settings_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.settings_toggle.setArrowType(Qt.NoArrow)
+        self.settings_toggle.setStyleSheet(
+            f"QToolButton {{ background: transparent; border: none;"
+            f" color: {TEXT_DIM}; padding: 6px 4px;"
+            f" font-weight: 600; letter-spacing: 0.5px; }}"
+            f"QToolButton:hover {{ color: {GOLD_BRIGHT}; }}"
+            f"QToolButton:checked {{ color: {GOLD}; }}"
+        )
+        self.settings_toggle.toggled.connect(self._on_settings_toggled)
+        root.addWidget(self.settings_toggle)
+
+        self.settings_panel = QWidget()
+        sp = QVBoxLayout(self.settings_panel)
+        sp.setContentsMargins(0, 0, 0, 0)
+        sp.setSpacing(10)
+
         # --- Recording roots section ------------------------------------------
         self.roots_box = QGroupBox()
         rb = QVBoxLayout(self.roots_box)
         self.roots_list = QListWidget()
+        self.roots_list.setMaximumHeight(120)
         rb.addWidget(self.roots_list)
         btns = QHBoxLayout()
         self.add_btn = QPushButton()
@@ -124,9 +178,9 @@ class MainWindow(QMainWindow):
         btns.addStretch(1)
         rb.addLayout(btns)
         self.effective_label = QLabel()
-        self.effective_label.setStyleSheet("color:#888;")
+        self.effective_label.setStyleSheet(f"color:{TEXT_DIM};")
         rb.addWidget(self.effective_label)
-        root.addWidget(self.roots_box)
+        sp.addWidget(self.roots_box)
 
         # --- Actions section --------------------------------------------------
         self.actions_box = QGroupBox()
@@ -141,24 +195,7 @@ class MainWindow(QMainWindow):
         ab.addStretch(1)
         self.stats_label = QLabel("…")
         ab.addWidget(self.stats_label)
-        root.addWidget(self.actions_box)
-
-        # --- Hotkey section ---------------------------------------------------
-        self.hk_box = QGroupBox()
-        hb = QHBoxLayout(self.hk_box)
-        self.shortcut_label = QLabel()
-        hb.addWidget(self.shortcut_label)
-        self.hotkey_edit = QKeySequenceEdit()
-        self.hotkey_edit.setKeySequence(_pynput_to_qt_seq(self.config.hotkey))
-        hb.addWidget(self.hotkey_edit)
-        self.apply_btn = QPushButton()
-        self.apply_btn.clicked.connect(self._apply_hotkey)
-        hb.addWidget(self.apply_btn)
-        self.test_btn = QPushButton()
-        self.test_btn.clicked.connect(self._test_popup)
-        hb.addWidget(self.test_btn)
-        hb.addStretch(1)
-        root.addWidget(self.hk_box)
+        sp.addWidget(self.actions_box)
 
         # --- Cloud sync section -----------------------------------------------
         self.sync_box = QGroupBox()
@@ -213,27 +250,21 @@ class MainWindow(QMainWindow):
         sb_bot.addWidget(self.sync_override_btn)
         sb_bot.addStretch(1)
         sb_outer.addLayout(sb_bot)
-        root.addWidget(self.sync_box)
+        sp.addWidget(self.sync_box)
 
-        # --- Stats tools ------------------------------------------------------
-        self.tools_box = QGroupBox()
-        tb = QHBoxLayout(self.tools_box)
-        self.sl_btn = QPushButton()
-        self.sl_btn.clicked.connect(lambda: self._show_hero_ranking("Storm League"))
-        tb.addWidget(self.sl_btn)
-        self.aram_btn = QPushButton()
-        self.aram_btn.clicked.connect(lambda: self._show_hero_ranking("ARAM"))
-        tb.addWidget(self.aram_btn)
-        tb.addStretch(1)
-        root.addWidget(self.tools_box)
+        # Settings panel sits below the toggle, expandable on click.
+        self.settings_panel.setVisible(False)
+        root.addWidget(self.settings_panel)
 
         # --- Log --------------------------------------------------------------
         self.log_box = QGroupBox()
         lb = QVBoxLayout(self.log_box)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMaximumHeight(140)
         lb.addWidget(self.log)
-        root.addWidget(self.log_box, 1)
+        root.addWidget(self.log_box)
+        root.addStretch(1)
 
         # --- Runtime: store, workers, hotkey, popup --------------------------
         self._scan_thread: QThread | None = None
@@ -274,6 +305,7 @@ class MainWindow(QMainWindow):
         self.hotkey.error.connect(lambda msg: self._log(f"[hotkey] {msg}"))
 
         self.popup = PopupWindow(self.store)
+        self.capture_progress = CaptureProgressDialog(self)
 
         # Seed UI from config.
         self._refresh_roots()
@@ -286,6 +318,148 @@ class MainWindow(QMainWindow):
         # Kick off a startup sync if the user has configured cloud creds.
         if self._cloud_sync is not None and self.config.sync_auto:
             self._start_sync(force=False)
+
+    # --- primary feature cards ---------------------------------------------
+
+    def _build_bp_card(self) -> QFrame:
+        """The big "BP intelligence" card: hotkey config + test button.
+
+        Visually the most prominent thing on the main window since the
+        hotkey-driven OCR analysis is the app's primary feature.
+        """
+        card = QFrame()
+        card.setObjectName("primaryCard")
+        card.setStyleSheet(
+            f"QFrame#primaryCard {{"
+            f" background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            f"   stop:0 {BG_ELEVATED}, stop:1 {BG_DEEP});"
+            f" border: 1px solid {GOLD_DIM};"
+            f" border-radius: 10px;"
+            f"}}"
+            f"QFrame#primaryCard:hover {{ border-color: {GOLD}; }}"
+        )
+
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 14, 18, 14)
+        v.setSpacing(8)
+
+        # Eyebrow / title row.
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        eyebrow = QLabel("⚡")
+        eyebrow.setStyleSheet(f"color: {GOLD_BRIGHT}; font-size: 22pt;")
+        head.addWidget(eyebrow)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(0)
+        self.bp_title = QLabel()
+        self.bp_title.setStyleSheet(
+            f"color: {GOLD}; font-size: 16pt; font-weight: 700;"
+            f" letter-spacing: 0.5px;"
+        )
+        title_box.addWidget(self.bp_title)
+        self.bp_subtitle = QLabel()
+        self.bp_subtitle.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 9pt;"
+        )
+        self.bp_subtitle.setWordWrap(True)
+        title_box.addWidget(self.bp_subtitle)
+        head.addLayout(title_box, 1)
+        v.addLayout(head)
+
+        # Hotkey row.
+        hk_row = QHBoxLayout()
+        self.shortcut_label = QLabel()
+        hk_row.addWidget(self.shortcut_label)
+        self.hotkey_edit = QKeySequenceEdit()
+        self.hotkey_edit.setKeySequence(_pynput_to_qt_seq(self.config.hotkey))
+        hk_row.addWidget(self.hotkey_edit, 1)
+        self.apply_btn = QPushButton()
+        self.apply_btn.clicked.connect(self._apply_hotkey)
+        hk_row.addWidget(self.apply_btn)
+        v.addLayout(hk_row)
+
+        # Primary CTA — big gold "test" button.
+        self.test_btn = QPushButton()
+        self.test_btn.clicked.connect(self._test_popup)
+        self.test_btn.setProperty("variant", "primary")
+        self.test_btn.setMinimumHeight(40)
+        v.addWidget(self.test_btn)
+        # Recompute style after setProperty so the QSS selector kicks in.
+        self.test_btn.style().unpolish(self.test_btn)
+        self.test_btn.style().polish(self.test_btn)
+
+        return card
+
+    def _build_ranking_card(self) -> QFrame:
+        """The hero strength ranking entry point — a peer of the BP card."""
+        card = QFrame()
+        card.setObjectName("primaryCard")
+        card.setStyleSheet(
+            f"QFrame#primaryCard {{"
+            f" background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            f"   stop:0 {BG_ELEVATED}, stop:1 {BG_DEEP});"
+            f" border: 1px solid {GOLD_DIM};"
+            f" border-radius: 10px;"
+            f"}}"
+            f"QFrame#primaryCard:hover {{ border-color: {GOLD}; }}"
+        )
+
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 14, 18, 14)
+        v.setSpacing(8)
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        eyebrow = QLabel("📊")
+        eyebrow.setStyleSheet(f"color: {GOLD_BRIGHT}; font-size: 22pt;")
+        head.addWidget(eyebrow)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(0)
+        self.ranking_title = QLabel()
+        self.ranking_title.setStyleSheet(
+            f"color: {GOLD}; font-size: 16pt; font-weight: 700;"
+            f" letter-spacing: 0.5px;"
+        )
+        title_box.addWidget(self.ranking_title)
+        self.ranking_subtitle = QLabel()
+        self.ranking_subtitle.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 9pt;"
+        )
+        self.ranking_subtitle.setWordWrap(True)
+        title_box.addWidget(self.ranking_subtitle)
+        head.addLayout(title_box, 1)
+        v.addLayout(head)
+
+        # Two big mode buttons.
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        self.sl_btn = QPushButton()
+        self.sl_btn.clicked.connect(lambda: self._show_hero_ranking("Storm League"))
+        self.sl_btn.setMinimumHeight(40)
+        self.sl_btn.setProperty("variant", "primary")
+        btn_row.addWidget(self.sl_btn)
+        self.aram_btn = QPushButton()
+        self.aram_btn.clicked.connect(lambda: self._show_hero_ranking("ARAM"))
+        self.aram_btn.setMinimumHeight(40)
+        btn_row.addWidget(self.aram_btn)
+        v.addLayout(btn_row)
+        for b in (self.sl_btn, self.aram_btn):
+            b.style().unpolish(b)
+            b.style().polish(b)
+        # Trailing flexible space so the card matches the BP card's height.
+        v.addStretch(1)
+
+        return card
+
+    def _on_settings_toggled(self, on: bool) -> None:
+        self.settings_panel.setVisible(on)
+        self.settings_toggle.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+        self.settings_toggle.setText(
+            ("▾ " if on else "▸ ") + t("ui.main.settings")
+        )
+        # Hide the ToolButton's own arrow icon now that we're putting an
+        # arrow glyph in the text — keeping both looks redundant.
+        self.settings_toggle.setArrowType(Qt.NoArrow)
 
     # --- i18n ---------------------------------------------------------------
 
@@ -308,10 +482,20 @@ class MainWindow(QMainWindow):
         self.scan_btn.setText(t("ui.main.start_scan"))
         self.watch_chk.setText(t("ui.main.watch"))
 
-        self.hk_box.setTitle(t("ui.main.hotkey_section"))
+        # Primary feature cards.
+        self.bp_title.setText(t("ui.main.bp_card_title"))
+        self.bp_subtitle.setText(t("ui.main.bp_card_subtitle"))
         self.shortcut_label.setText(t("ui.main.shortcut"))
         self.apply_btn.setText(t("ui.main.apply"))
-        self.test_btn.setText(t("ui.main.test_popup"))
+        self.test_btn.setText(t("ui.main.bp_card_cta"))
+
+        self.ranking_title.setText(t("ui.main.ranking_card_title"))
+        self.ranking_subtitle.setText(t("ui.main.ranking_card_subtitle"))
+
+        self.settings_toggle.setText(
+            "▾ " + t("ui.main.settings") if self.settings_toggle.isChecked()
+            else "▸ " + t("ui.main.settings")
+        )
 
         self.sync_box.setTitle(t("ui.main.sync_section"))
         self.sync_url_label.setText(t("ui.main.sync_url"))
@@ -337,7 +521,6 @@ class MainWindow(QMainWindow):
                 if not cur or cur == t("ui.main.sync_disabled"):
                     self.sync_status_label.setText(t("ui.main.sync_using_defaults"))
 
-        self.tools_box.setTitle(t("ui.main.tools"))
         self.sl_btn.setText(t("ui.main.sl_ranking"))
         self.sl_btn.setToolTip(t("ui.main.sl_ranking_tip"))
         self.aram_btn.setText(t("ui.main.aram_ranking"))
@@ -608,12 +791,17 @@ class MainWindow(QMainWindow):
             return
         self._hotkey_busy = True
         self._log(t("ui.main.capturing_screenshot"))
+        # Show the marketing-y progress card so the user has feedback
+        # during the 1–3 s OCR pipeline. Anchor it to the main window
+        # for now; the popup itself takes over once we have results.
+        self.capture_progress.start(anchor=self)
 
         thread = QThread(self)
         worker = HotkeyWorker()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._log)
+        worker.progress.connect(self.capture_progress.update_substatus)
         worker.finished.connect(self._on_hotkey_finished)
         worker.finished.connect(thread.quit)
         thread.finished.connect(self._cleanup_hotkey_thread)
@@ -642,6 +830,12 @@ class MainWindow(QMainWindow):
 
         if result.drafter:
             self._log(t("ui.main.drafting", name=result.drafter))
+
+        # Got something useful → success state; otherwise keep the
+        # progress card around long enough for the user to read the
+        # error before it fades.
+        ok = bool(result.screenshot_path) and (allies or enemies or map_name)
+        self.capture_progress.finish(ok=bool(ok))
 
         self.popup.show_for_map(
             map_name,
