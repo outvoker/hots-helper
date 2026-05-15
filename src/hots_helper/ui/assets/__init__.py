@@ -40,3 +40,16 @@ def app_icon() -> QIcon:
 def asset_path(name: str) -> Path:
     """Resolve a packaged asset name (``icon.ico``, ``icon-256.png``, …)."""
     return _ASSETS_DIR / name
+
+
+def sample_bp_screenshot() -> Path | None:
+    """Return the bundled sample BP-screen image, or ``None`` if missing.
+
+    Used by the "样例测试 / Sample" button so users can see what the BP
+    popup looks like without actually being in a Heroes of the Storm
+    draft. The file is a real fullscreen screenshot of a CN-client
+    drafting screen with 5v5 names visible, so the OCR + parser
+    pipeline behaves identically to a real capture.
+    """
+    p = _ASSETS_DIR / "sample_bp.jpeg"
+    return p if p.is_file() else None

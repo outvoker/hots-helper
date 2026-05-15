@@ -168,23 +168,44 @@ class HotkeyWorker(QObject):
     progress = Signal(str)
     finished = Signal(object)  # HotkeyShotResult
 
+    def __init__(self, sample_path: Path | None = None) -> None:
+        super().__init__()
+        # If set, skip the live screenshot stage and use this image
+        # instead. Used by the BP card's "样例测试 / Sample" button so
+        # the user can see the popup without being in a real game.
+        self._sample_path: Path | None = sample_path
+
     def run(self) -> None:
-        import time
         log_lines: list[str] = []
         screenshot_path: Path | None = None
 
-        # Stage 1: screenshot
+        # Stage 1: screenshot — or load the bundled sample.
         t0 = time.monotonic()
-        self.progress.emit("[1/3] Capturing screenshot…")
-        try:
-            from .screenshot import capture_fullscreen
-            screenshot_path = capture_fullscreen()
-            dt = time.monotonic() - t0
-            log_lines.append(f"[1/3] Screenshot saved in {dt:.1f}s: {screenshot_path}")
-            self.progress.emit(f"[1/3] Screenshot done ({dt:.1f}s)")
-        except Exception as e:
-            log_lines.append(f"[1/3 screenshot error] {type(e).__name__}: {e}")
-            log_lines.append(traceback.format_exc())
+        if self._sample_path is not None:
+            self.progress.emit("[1/3] Loading sample BP screenshot…")
+            try:
+                p = Path(self._sample_path)
+                if not p.is_file():
+                    raise FileNotFoundError(p)
+                screenshot_path = p
+                log_lines.append(f"[1/3] Using sample image: {p}")
+                self.progress.emit("[1/3] Sample loaded — running OCR next")
+            except Exception as e:
+                log_lines.append(
+                    f"[1/3 sample load error] {type(e).__name__}: {e}"
+                )
+                log_lines.append(traceback.format_exc())
+        else:
+            self.progress.emit("[1/3] Capturing screenshot…")
+            try:
+                from .screenshot import capture_fullscreen
+                screenshot_path = capture_fullscreen()
+                dt = time.monotonic() - t0
+                log_lines.append(f"[1/3] Screenshot saved in {dt:.1f}s: {screenshot_path}")
+                self.progress.emit(f"[1/3] Screenshot done ({dt:.1f}s)")
+            except Exception as e:
+                log_lines.append(f"[1/3 screenshot error] {type(e).__name__}: {e}")
+                log_lines.append(traceback.format_exc())
 
         map_name = ""
         allies: list[str] = [""] * 5

@@ -378,15 +378,27 @@ class MainWindow(QMainWindow):
         hk_row.addWidget(self.apply_btn)
         v.addLayout(hk_row)
 
-        # Primary CTA — big gold "test" button.
-        self.test_btn = QPushButton()
-        self.test_btn.clicked.connect(self._test_popup)
-        self.test_btn.setProperty("variant", "primary")
-        self.test_btn.setMinimumHeight(40)
-        v.addWidget(self.test_btn)
-        # Recompute style after setProperty so the QSS selector kicks in.
-        self.test_btn.style().unpolish(self.test_btn)
-        self.test_btn.style().polish(self.test_btn)
+        # Two CTAs side by side: live capture (real screenshot, what the
+        # hotkey actually does — gold/primary), and sample capture (uses
+        # a bundled BP screenshot, no game required — secondary). Split
+        # because the previous single "测试 (无需对局)" button was misleading
+        # — it also took a real screenshot, which on a desktop without a
+        # HotS game running just OCR'd the user's email/Discord/etc.
+        cta_row = QHBoxLayout()
+        cta_row.setSpacing(10)
+        self.capture_btn = QPushButton()
+        self.capture_btn.clicked.connect(self._trigger_real_capture)
+        self.capture_btn.setProperty("variant", "primary")
+        self.capture_btn.setMinimumHeight(40)
+        cta_row.addWidget(self.capture_btn, 2)
+        self.sample_btn = QPushButton()
+        self.sample_btn.clicked.connect(self._trigger_sample_capture)
+        self.sample_btn.setMinimumHeight(40)
+        cta_row.addWidget(self.sample_btn, 1)
+        v.addLayout(cta_row)
+        for b in (self.capture_btn, self.sample_btn):
+            b.style().unpolish(b)
+            b.style().polish(b)
 
         return card
 
@@ -487,7 +499,10 @@ class MainWindow(QMainWindow):
         self.bp_subtitle.setText(t("ui.main.bp_card_subtitle"))
         self.shortcut_label.setText(t("ui.main.shortcut"))
         self.apply_btn.setText(t("ui.main.apply"))
-        self.test_btn.setText(t("ui.main.bp_card_cta"))
+        self.capture_btn.setText(t("ui.main.bp_capture_cta"))
+        self.capture_btn.setToolTip(t("ui.main.bp_capture_tip"))
+        self.sample_btn.setText(t("ui.main.bp_sample_cta"))
+        self.sample_btn.setToolTip(t("ui.main.bp_sample_tip"))
 
         self.ranking_title.setText(t("ui.main.ranking_card_title"))
         self.ranking_subtitle.setText(t("ui.main.ranking_card_subtitle"))
@@ -683,8 +698,23 @@ class MainWindow(QMainWindow):
         self.hotkey.set_hotkey(combo)
         self._log(t("ui.main.hotkey_set", combo=combo))
 
-    def _test_popup(self) -> None:
-        self._on_hotkey()
+    def _trigger_real_capture(self) -> None:
+        """Run the real screenshot pipeline (same as pressing the hotkey)."""
+        self._on_hotkey(sample_path=None)
+
+    def _trigger_sample_capture(self) -> None:
+        """Run the pipeline against the bundled sample BP image so the
+        user can preview the popup without being in a draft."""
+        from .assets import sample_bp_screenshot
+        sample = sample_bp_screenshot()
+        if sample is None:
+            QMessageBox.warning(
+                self,
+                t("ui.main.sample_missing_title"),
+                t("ui.main.sample_missing_body"),
+            )
+            return
+        self._on_hotkey(sample_path=sample)
 
     # --- cloud sync ---------------------------------------------------------
 
@@ -783,7 +813,7 @@ class MainWindow(QMainWindow):
         self._aram_dialog.raise_()
         self._aram_dialog.activateWindow()
 
-    def _on_hotkey(self) -> None:
+    def _on_hotkey(self, sample_path: Path | None = None) -> None:
         # Reentry guard: if the user spams the hotkey while OCR is running
         # we'd queue up multiple worker threads and confuse winrt.
         if self._hotkey_busy:
@@ -797,7 +827,7 @@ class MainWindow(QMainWindow):
         self.capture_progress.start(anchor=self)
 
         thread = QThread(self)
-        worker = HotkeyWorker()
+        worker = HotkeyWorker(sample_path=sample_path)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._log)

@@ -63,7 +63,30 @@ _translations: dict[str, dict[str, str]] = {
               "OCRs both teams, mines squad history, and recommends "
               "bans, picks and talents.",
     },
-    "ui.main.bp_card_cta": {"zh": "立即测试 (无需对局)", "en": "Test now (no game needed)"},
+    "ui.main.bp_capture_cta": {
+        "zh": "立即截屏分析",
+        "en": "Capture & analyse now",
+    },
+    "ui.main.bp_capture_tip": {
+        "zh": "对当前屏幕截图并跑完整 BP 分析流程（与按下快捷键的效果完全一致）。",
+        "en": "Take a real screenshot and run the full BP analysis pipeline — same as pressing the hotkey.",
+    },
+    "ui.main.bp_sample_cta": {
+        "zh": "样例测试",
+        "en": "Sample run",
+    },
+    "ui.main.bp_sample_tip": {
+        "zh": "用内置示例 BP 截图跑一遍流程，方便在不开游戏的情况下预览效果。",
+        "en": "Runs the full pipeline against a bundled sample BP screenshot — preview the popup without launching the game.",
+    },
+    "ui.main.sample_missing_title": {
+        "zh": "样例图片缺失",
+        "en": "Sample image missing",
+    },
+    "ui.main.sample_missing_body": {
+        "zh": "本地找不到内置样例截图（src/hots_helper/ui/assets/sample_bp.jpeg）。",
+        "en": "Bundled sample image is missing (src/hots_helper/ui/assets/sample_bp.jpeg).",
+    },
     "ui.main.ranking_card_title": {
         "zh": "英雄强度榜",
         "en": "Hero strength rankings",

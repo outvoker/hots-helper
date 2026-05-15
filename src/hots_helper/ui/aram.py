@@ -238,6 +238,22 @@ class HeroRankingDialog(QDialog):
         self._reload()
 
     def _reload(self) -> None:
+        try:
+            self._reload_inner()
+        except Exception as e:
+            # Without this, a SQL error (or any other unhandled exception)
+            # silently aborts mid-update and leaves the table showing
+            # whatever was there before — the user changes the filter
+            # and nothing happens. Surface it so we can see what went
+            # wrong instead.
+            import traceback
+            self.summary.setText(
+                f"<span style='color:#e08585;'>"
+                f"加载失败：{type(e).__name__}: {e}</span>"
+            )
+            traceback.print_exc()
+
+    def _reload_inner(self) -> None:
         mode = self.mode_combo.currentData()
         mode_label = self.mode_combo.currentText()
         map_name = self.map_combo.currentData()  # None = "all maps"
@@ -249,11 +265,21 @@ class HeroRankingDialog(QDialog):
         else:
             self.title.setText(t("ui.aram.title", mode=mode_label))
 
-        params: list = [mode]
-        map_clause = ""
+        # Two filter clauses — one for queries that join replays as ``r``
+        # (the main aggregate + the player_match total), and one for
+        # queries that read from the ``replays`` table directly. The
+        # earlier code reused a single ``r.map_name = ?`` snippet against
+        # both contexts, which crashed in the un-aliased path with
+        # ``no such column: r.map_name`` and silently aborted ``_reload``.
+        params_joined: list = [mode]
+        map_clause_joined = ""
+        params_replays: list = [mode]
+        map_clause_replays = ""
         if map_name:
-            map_clause = " AND r.map_name = ?"
-            params.append(map_name)
+            map_clause_joined = " AND r.map_name = ?"
+            params_joined.append(map_name)
+            map_clause_replays = " AND map_name = ?"
+            params_replays.append(map_name)
 
         rows = self.store.conn.execute(f"""
             SELECT pm.hero,
@@ -269,9 +295,9 @@ class HeroRankingDialog(QDialog):
                    AVG(pm.experience_contribution) AS xp
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE r.mode = ?{map_clause}
+            WHERE r.mode = ?{map_clause_joined}
             GROUP BY pm.hero
-        """, tuple(params)).fetchall()
+        """, tuple(params_joined)).fetchall()
 
         min_games = self.min_games_spin.value()
         ranked = []
@@ -304,14 +330,14 @@ class HeroRankingDialog(QDialog):
         # DB summary row — same map filter applied so the totals match
         # the data we actually charted.
         total_games = self.store.conn.execute(
-            f"SELECT COUNT(*) FROM replays WHERE mode = ?{map_clause}",
-            tuple(params),
+            f"SELECT COUNT(*) FROM replays WHERE mode = ?{map_clause_replays}",
+            tuple(params_replays),
         ).fetchone()[0]
         total_pm = self.store.conn.execute(f"""
             SELECT COUNT(*) FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE r.mode = ?{map_clause}
-        """, tuple(params)).fetchone()[0]
+            WHERE r.mode = ?{map_clause_joined}
+        """, tuple(params_joined)).fetchone()[0]
         self.summary.setText(
             t("ui.aram.summary",
               games=total_games, mode=mode_label, pm=total_pm,
