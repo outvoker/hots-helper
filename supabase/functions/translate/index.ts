@@ -1,11 +1,11 @@
 // Supabase Edge Function — proxy for VolcEngine MT (火山翻译).
 //
 // Why a server-side proxy?  VolcEngine signs requests with a SecretKey.
-// We can't ship the key inside the .exe (anyone with a hex editor would
-// extract it). So the squad runs this Function on Supabase, the .exe
-// authenticates with the public anon key (rate-limited per IP), and
-// the Function does the SigV4-style signing on its own with secrets
-// pulled from `Deno.env`.
+// We can't ship the key inside the .exe (anyone with a hex editor —
+// or a .pyc decompiler — would extract it). The squad runs this
+// Function on Supabase, the .exe authenticates with the public anon
+// key, and the Function does the SigV4-style signing on its own with
+// secrets pulled from Deno.env.
 //
 // Deploy from the repo root:
 //
@@ -21,12 +21,6 @@
 //
 // VolcEngine MT API reference:
 //   https://www.volcengine.com/docs/4640/65067
-//   Region:  cn-north-1
-//   Service: translate
-//   Action:  TranslateText (Version 2020-06-01)
-
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { hmac } from "https://deno.land/x/hmac@v2.0.1/mod.ts";
 
 const REGION = "cn-north-1";
 const SERVICE = "translate";
@@ -38,7 +32,23 @@ const SECRET_KEY = Deno.env.get("VOLC_SECRET_ACCESS_KEY") ?? "";
 
 const ALLOWED_TARGETS = new Set(["zh", "en", "ko", "ja"]);
 
-const cors = {
+interface TranslateRequestBody {
+  texts?: string[];
+  target?: string;
+  source?: string;
+}
+
+interface VolcTranslationItem {
+  Translation?: string;
+  DetectedSourceLanguage?: string;
+}
+
+interface ResponseTranslation {
+  text: string;
+  source: string;
+}
+
+const cors: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
@@ -46,7 +56,9 @@ const cors = {
 };
 
 function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -55,14 +67,35 @@ async function sha256Hex(input: string): Promise<string> {
   return bytesToHex(new Uint8Array(hash));
 }
 
-function hmacSha256(key: Uint8Array | string, data: string): Uint8Array {
-  // The volc-style hmac chain expects raw bytes for the *next* HMAC's
-  // key, so we use the binary output of `hmac` rather than the hex one.
-  const out = hmac("sha256", key, data, undefined, "buffer") as Uint8Array;
-  return out;
+async function importHmacKey(key: ArrayBuffer | Uint8Array): Promise<CryptoKey> {
+  // crypto.subtle.importKey wants a BufferSource; ArrayBuffer / Uint8Array both qualify.
+  return crypto.subtle.importKey(
+    "raw",
+    key,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
 }
 
-async function signedRequest(payload: string, action: string, version: string): Promise<Response> {
+async function hmacSha256(
+  key: ArrayBuffer | Uint8Array,
+  data: string,
+): Promise<Uint8Array> {
+  const cryptoKey = await importHmacKey(key);
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    new TextEncoder().encode(data),
+  );
+  return new Uint8Array(sig);
+}
+
+async function signedRequest(
+  payload: string,
+  action: string,
+  version: string,
+): Promise<Response> {
   // VolcEngine uses an AWS-SigV4 derivative. Datestamp is YYYYMMDD,
   // timestamp is YYYYMMDDTHHMMSSZ.
   const now = new Date();
@@ -98,11 +131,15 @@ async function signedRequest(payload: string, action: string, version: string): 
   ].join("\n");
 
   // Derive signing key.
-  const kDate = hmacSha256(SECRET_KEY, dateStamp);
-  const kRegion = hmacSha256(kDate, REGION);
-  const kService = hmacSha256(kRegion, SERVICE);
-  const kSigning = hmacSha256(kService, "request");
-  const signature = bytesToHex(hmacSha256(kSigning, stringToSign));
+  const kDate = await hmacSha256(
+    new TextEncoder().encode(SECRET_KEY),
+    dateStamp,
+  );
+  const kRegion = await hmacSha256(kDate, REGION);
+  const kService = await hmacSha256(kRegion, SERVICE);
+  const kSigning = await hmacSha256(kService, "request");
+  const sig = await hmacSha256(kSigning, stringToSign);
+  const signature = bytesToHex(sig);
 
   const authHeader =
     `HMAC-SHA256 Credential=${ACCESS_KEY}/${credentialScope}, ` +
@@ -121,7 +158,14 @@ async function signedRequest(payload: string, action: string, version: string): 
   });
 }
 
-serve(async (req) => {
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...cors, "Content-Type": "application/json" },
+  });
+}
+
+Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: cors });
   }
@@ -129,64 +173,67 @@ serve(async (req) => {
     return new Response("method not allowed", { status: 405, headers: cors });
   }
   if (!ACCESS_KEY || !SECRET_KEY) {
-    return new Response(
-      JSON.stringify({ error: "translate function: VOLC_* secrets not set" }),
-      { status: 500, headers: { ...cors, "Content-Type": "application/json" } },
+    return jsonResponse(
+      { error: "translate function: VOLC_* secrets not set" },
+      500,
     );
   }
 
-  let body: { texts?: string[]; target?: string; source?: string };
+  let body: TranslateRequestBody;
   try {
     body = await req.json();
   } catch {
-    return new Response(
-      JSON.stringify({ error: "invalid JSON" }),
-      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
-    );
+    return jsonResponse({ error: "invalid JSON" }, 400);
   }
-  const texts = Array.isArray(body?.texts) ? body.texts.filter((t): t is string => typeof t === "string") : [];
+  const texts = Array.isArray(body?.texts)
+    ? body.texts.filter((t: unknown): t is string => typeof t === "string")
+    : [];
   const target = (body?.target ?? "zh").toLowerCase();
   if (!ALLOWED_TARGETS.has(target)) {
-    return new Response(
-      JSON.stringify({ error: `unsupported target language: ${target}` }),
-      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+    return jsonResponse(
+      { error: `unsupported target language: ${target}` },
+      400,
     );
   }
   if (texts.length === 0) {
-    return new Response(
-      JSON.stringify({ translations: [] }),
-      { headers: { ...cors, "Content-Type": "application/json" } },
-    );
+    return jsonResponse({ translations: [] });
   }
   if (texts.length > 50) {
-    return new Response(
-      JSON.stringify({ error: "too many texts; max 50 per request" }),
-      { status: 400, headers: { ...cors, "Content-Type": "application/json" } },
+    return jsonResponse(
+      { error: "too many texts; max 50 per request" },
+      400,
     );
   }
 
-  const payload = JSON.stringify({
-    SourceLanguage: body?.source && body.source !== "auto" ? body.source : undefined,
+  const upstreamPayload: Record<string, unknown> = {
     TargetLanguage: target,
     TextList: texts,
-  });
+  };
+  if (body?.source && body.source !== "auto") {
+    upstreamPayload.SourceLanguage = body.source;
+  }
+  const payload = JSON.stringify(upstreamPayload);
 
-  const resp = await signedRequest(payload, "TranslateText", "2020-06-01");
+  let resp: Response;
+  try {
+    resp = await signedRequest(payload, "TranslateText", "2020-06-01");
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "unknown";
+    return jsonResponse({ error: `signing/fetch failed: ${msg}` }, 502);
+  }
   if (!resp.ok) {
     const errBody = await resp.text();
-    return new Response(
-      JSON.stringify({ error: `volc upstream ${resp.status}`, detail: errBody.slice(0, 400) }),
-      { status: 502, headers: { ...cors, "Content-Type": "application/json" } },
+    return jsonResponse(
+      { error: `volc upstream ${resp.status}`, detail: errBody.slice(0, 400) },
+      502,
     );
   }
-  const upstream = await resp.json();
-  // VolcEngine response: { ResponseMetadata: …, TranslationList: [{ Translation, DetectedSourceLanguage }, …] }
-  const list = (upstream?.TranslationList ?? []).map((row: { Translation?: string; DetectedSourceLanguage?: string }) => ({
-    text: row?.Translation ?? "",
-    source: row?.DetectedSourceLanguage ?? "",
-  }));
-  return new Response(
-    JSON.stringify({ translations: list }),
-    { headers: { ...cors, "Content-Type": "application/json" } },
+  const upstream = await resp.json() as { TranslationList?: VolcTranslationItem[] };
+  const list: ResponseTranslation[] = (upstream?.TranslationList ?? []).map(
+    (row) => ({
+      text: row?.Translation ?? "",
+      source: row?.DetectedSourceLanguage ?? "",
+    }),
   );
+  return jsonResponse({ translations: list });
 });
