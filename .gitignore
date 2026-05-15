@@ -21,13 +21,15 @@ recordings/
 # committed to git. Keep the data/ dir out of source control entirely.
 data/
 
-# Local test screenshots (contain other players' BattleTags)
+# Local test screenshots (contain other players' BattleTags). The
+# leading "/" anchors the rule to the repo root so docs/screenshots/
+# (which holds anonymised README assets) is *not* swept up too.
 Snipaste_*.png
 Snipaste_*.jpg
 test.jpeg
 test.jpg
 test.png
-screenshots/
+/screenshots/
 *.StormReplay
 
 # English report — Chinese is the canonical version

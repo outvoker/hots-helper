@@ -1,32 +1,83 @@
 # HotS Helper
 
-Local replay analyzer + pre-game scout for Heroes of the Storm.
+A locally-running Heroes of the Storm replay analyzer + pre-game BP scout
+for Storm League squads. Designed for one squad to share their match
+history across machines and get data-driven ban/pick suggestions in real
+time during the draft.
 
-## What it does
+![Main window](docs/screenshots/01-main-window.png)
 
-1. **Watches** your replay folder, parses every `.StormReplay` (real talent
-   names, K/D/A, damage, healing, awards, bans, …) and stores it in a local
-   SQLite DB. Same-match deduplication so teammates' replay copies don't
-   inflate stats.
-2. Pre-game **hotkey** captures a fullscreen screenshot of the BP screen, runs
-   the system OCR (macOS Vision / Windows Media OCR), and pops up a
-   floating, always-on-top window with:
-   - 🚫 Ban suggestions from each enemy's signature heroes (statistically
-     significant lift over their own baseline).
-   - ✅ Pick suggestions for the current map (Wilson lower bound + z-test).
-   - For each of the 10 players: K/D/A, win-rate, top-3 used heroes, and an
-     expand button to see every hero they've played.
-3. Names are editable: if OCR mis-reads a name (low-confidence slots are
-   highlighted yellow), correct it and press Enter to re-query.
+## Features
 
-Storm League data only by default. ARAM/Custom replays are still ingested for
-your own match history but excluded from BP analysis.
+- **BP intelligence (the headline feature).** Press a global hotkey
+  during the draft → app captures the screen, OCRs both teams, joins
+  against the squad's combined match history, and pops up a floating
+  always-on-top window with:
+  - 🚫 ban suggestions ranked by who on the enemy team plays each
+    candidate well (statistically significant lift over the player's
+    own baseline);
+  - ✅ pick suggestions for the active map (Wilson 95% lower bound +
+    z-test against global average);
+  - per-player card with K/D/A, win-rate, and **per-map** vs.
+    **all-maps** hero breakdown — the map-aware list at the top is
+    sorted by win-rate so you can see which heroes the player wins
+    with on this specific battleground.
+- **Hero strength rankings** for both Storm League and ARAM, filterable
+  by map and sortable by raw win-rate, conservative win-rate
+  (Wilson lower bound, the recommended setting), games played, or
+  alphabetical.
+- **Cloud sync** — embedded Supabase backend with watermark-based
+  incremental sync. Squad members run the same `.exe` and see each
+  other's matches automatically. No setup needed; for private
+  deployments there's an "Advanced" toggle to point at your own project.
+- **Replay ingest** — watches your replay folder, parses each
+  `.StormReplay` (talents, K/D/A, damage, healing, awards, bans,
+  pre-draft attributes, …), de-duplicates by `match_key` so teammate
+  copies of the same match don't inflate stats.
+- **Talent names in 中文** — bundled lookup table of 2 700+ talent IDs
+  → 官方简中名（数据来源：HeroesToolChest gamestrings 镜像）。
+- **Sample mode** — bundled sample BP screenshot lets you see the
+  popup without launching a real game.
+
+## Screenshots
+
+### Main window
+
+The two primary features (BP intelligence + ranking) get hero cards on
+top; everything else (replay folders, scan, cloud sync) collapses
+behind the "高级设置" toggle.
+
+![Main window collapsed](docs/screenshots/01-main-window.png)
+
+Expanded settings panel:
+
+![Main window with settings panel expanded](docs/screenshots/02-main-window-settings.png)
+
+### Capture progress
+
+When the hotkey fires, a floating gold-bordered card streams the
+pipeline status while OCR runs (1–3 s on Windows). Always-on-top,
+focus-safe — won't kick a fullscreen game out of exclusive mode.
+
+![Capture progress dialog](docs/screenshots/05-capture-progress.png)
+
+### BP popup
+
+Two columns of player cards (allies / enemies), ban + pick suggestions
+on top, map dropdown filter at top-right.
+
+![BP popup](docs/screenshots/03-popup.png)
+
+### Hero strength ranking
+
+Sort by conservative win-rate by default; filter by map (SL ↔ ARAM
+pools auto-switch when you change mode).
+
+![Hero ranking](docs/screenshots/04-ranking.png)
 
 ---
 
 ## Quick start (development)
-
-Both macOS and Windows:
 
 ```bash
 # Install uv (https://docs.astral.sh/uv/)
@@ -44,94 +95,96 @@ uv run hots bp 巨龙镇 -e Player1 -e Player2 -e Player3 -e Player4 -e Player5
 uv run hots hero 阿兹莫丹 --map 巨龙镇
 ```
 
-The first launch auto-detects the standard HotS replay folder and offers it
-in the UI's "Replay folders" section. Click **Start scan** once to ingest
-everything; check **Watch for new replays** to keep it live.
+The first launch auto-detects the standard HotS replay folder and
+offers it in the **录像文件夹 / Replay folders** section. Click
+**开始扫描 / Start scan** once to ingest everything; tick **监听新录像
+/ Watch for new replays** to keep it live.
+
+If the squad cloud-sync defaults are present (they are in the shipped
+`.exe`), a fresh install will also pull every match the squad has
+already uploaded — no scan needed for new members.
 
 ---
 
 ## Windows
 
-### Path 1: Run from source
+### Path 1 — run from source
 
-1. Install Python 3.11+ from python.org (any modern Python 3.11/3.12/3.13
-   works).
-2. Install `uv`:
-   ```powershell
-   winget install --id=astral-sh.uv
-   ```
-3. From the project folder:
-   ```powershell
-   uv sync
-   uv run hots-ui
-   ```
-4. **Install the language packs for any names you expect to see**. Windows
-   OCR is single-language per pass, so the app fans out across whichever
-   languages are installed and merges results. Add as many as you need:
-   - Settings → Time & Language → Language & region → Add a language
-   - Recommended for an Asian server: 中文（简体, 中国）, 日本語, 한국어
-   - For each added language: click it → Language options → ensure
-     "Basic typing" (which includes the OCR data) is installed.
-   - English-only works if all your matches are alphanumeric names.
+```powershell
+winget install --id=astral-sh.uv
+uv sync
+uv run hots-ui
+```
 
-### Path 2: Distribute as `.exe` (no Python needed for end users)
+**Install OCR language packs.** Windows Media OCR is single-language
+per pass, so the app fans out across whichever languages are installed
+and merges results. Add as many as you need:
 
-Run on a Windows machine (the spec is fine, the bootloader has to be built
-on Windows itself):
+- Settings → Time & Language → Language & region → Add a language
+- Recommended for an Asian server: 中文（简体, 中国）, 日本語, 한국어
+- For each language: click it → Language options → ensure "Basic typing"
+  is installed (that includes the OCR data).
+
+English-only works if all your matches are alphanumeric names.
+
+### Path 2 — distribute the `.exe`
+
+Build on Windows itself (the bootloader is platform-specific):
 
 ```powershell
 uv sync
 uv run pyinstaller packaging\hots-helper.spec --clean --noconfirm
 ```
 
-Output: `dist\HotS-Helper\HotS-Helper.exe` plus the supporting `_internal`
-folder. Zip the whole `HotS-Helper` directory and ship it. Users
-double-click the `.exe`; no Python install required.
+`packaging\build-windows.ps1` is a thin wrapper.
 
-`packaging/build-windows.ps1` is a thin wrapper that runs the two commands
-above for you.
+Output: `dist\HotS-Helper\` — zip the **whole folder** (the `.exe` is
+just a launcher; the real Python + Qt + ONNX code lives next to it
+under `_internal\`). Users double-click the `.exe`; no Python install
+required. Total size is ~150–180 MB.
 
-### Default replay folder on Windows
+The build bundles the VC++ runtime DLLs (`vcruntime140.dll`,
+`msvcp140.dll`, `ucrtbase.dll`) so end users on a clean Windows install
+don't have to install the Visual C++ Redistributable.
 
-The app auto-detects:
+### Default replay folder
 
 ```
 %USERPROFILE%\Documents\Heroes of the Storm\Accounts\<id>\<region>-Hero-…\Replays\Multiplayer\
 ```
 
-OneDrive-redirected Documents (`%USERPROFILE%\OneDrive\Documents\…` and the
-Chinese `OneDrive\文档\…`) are also probed. If your install lives elsewhere,
-add it manually in the **Replay folders** section.
+OneDrive-redirected `Documents` (`%USERPROFILE%\OneDrive\Documents\…`
+and the Chinese `OneDrive\文档\…`) are also probed. If your install
+lives elsewhere, add it manually in **Replay folders**.
 
-### Hotkey notes
+### Hotkey
 
-The default hotkey is `Ctrl + Shift + H`. It uses `pynput` to listen
-globally. On Windows that should Just Work — no admin permission required
-unless your antivirus is paranoid about input listeners. If your hotkey
-collides with another app, change it in the **Pre-game scout hotkey**
-section and click Apply.
+Default: `Ctrl + Shift + H`. Uses `pynput` to listen globally — should
+just work, no admin permission required unless your antivirus is
+paranoid about input listeners. Change it in the BP card if there's
+a collision.
 
 ### Anti-virus / SmartScreen
 
-PyInstaller-built executables sometimes trigger SmartScreen on first run
-because the binary isn't code-signed. Click "More info" → "Run anyway",
-or sign the binary if you're distributing widely.
+PyInstaller binaries sometimes trigger SmartScreen on first run because
+they're not code-signed. Click "More info" → "Run anyway", or sign the
+binary if you're distributing widely.
 
 ---
 
 ## macOS
 
-The same `uv run hots-ui` works. The first time you press the hotkey, macOS
-will prompt for **Accessibility** and **Screen Recording** permissions:
+`uv run hots-ui` works the same. The first time you press the hotkey,
+macOS will ask for two permissions:
 
-- System Settings → Privacy & Security → Accessibility → enable Terminal (or
-  Python.app) so `pynput` can read global key events.
-- System Settings → Privacy & Security → Screen Recording → enable the same
-  process so `mss` can capture the full screen.
+- **Accessibility** — so `pynput` can read global key events.
+- **Screen Recording** — so `mss` can capture the full screen.
 
-After granting permissions, restart the app.
+System Settings → Privacy & Security → enable both for Terminal (or
+Python.app, whichever the prompt names). Restart the app afterwards.
 
-OCR uses the built-in Vision framework (macOS 10.15+). No additional setup.
+OCR uses the built-in Vision framework (macOS 10.15+). No additional
+setup.
 
 ---
 
@@ -139,28 +192,50 @@ OCR uses the built-in Vision framework (macOS 10.15+). No additional setup.
 
 | Path | Contents |
 |---|---|
-| `~/.config/hots-helper/config.json` (Linux) / `~/Library/Application Support/hots-helper/config.json` (mac) / `%APPDATA%\hots-helper\config.json` (Win) | folder list, hotkey, settings |
-| `~/Library/Application Support/hots-helper/hots.db` (mac) / `%LOCALAPPDATA%\hots-helper\hots.db` (Win) | the SQLite database |
-| `…\hots-helper\screenshots\` | hotkey screenshots, prematch-{ts}.png |
+| `~/.config/hots-helper/config.json` (Linux) / `~/Library/Application Support/hots-helper/config.json` (mac) / `%APPDATA%\hots-helper\config.json` (Win) | folder list, hotkey, language, sync prefs |
+| `~/Library/Application Support/hots-helper/hots.db` (mac) / `%LOCALAPPDATA%\hots-helper\hots.db` (Win) | local SQLite database |
+| `~/Library/Application Support/hots-helper/screenshots/` | hotkey screenshots, prematch-`<ts>`.png |
+| `~/Library/Application Support/hots-helper/sync_watermark.json` | last-pushed / last-pulled timestamps |
 
-Delete the `.db` file to start fresh. Scanning is idempotent: re-running
-`hots scan` only adds new replays; same-match perspectives from teammates
-are de-duplicated automatically.
+The DB used to live in the repo at `data/hots.db`; it's now in the
+user-data dir on every platform. Cloud sync repopulates a fresh
+install on first launch, so squad members joining later don't need to
+copy anything by hand.
+
+Delete the `.db` file to start fresh. Scanning is idempotent — re-runs
+only add new replays; same-match perspectives from teammates are
+de-duplicated by `match_key`.
 
 ---
 
-## CLI cheat-sheet
+## CLI
 
 ```bash
-hots scan [folder]         # one-shot ingest (idempotent)
-hots watch [folder]        # bootstrap scan + live watcher
-hots stats                 # DB summary
-hots players               # everybody seen in your replays
-hots lookup <name> [--map] # full per-player breakdown
-hots hero <hero> [--map]   # hero deep-dive: maps + talents
-hots heroes --min N        # all heroes with ≥ N games
-hots map <map> --min N     # heroes statistically strong/weak on a map
-hots bp <map> -e p1 ... -e p5  # full BP advisor (bans + picks)
+hots scan [folder]                # one-shot ingest (idempotent)
+hots watch [folder]               # bootstrap scan + live watcher
+hots stats                        # DB summary
+hots players                      # everybody seen in replays
+hots lookup <name> [--map]        # full per-player breakdown
+hots hero <hero> [--map]          # hero deep-dive: maps + talents
+hots heroes --min N               # all heroes with ≥ N games
+hots map <map> --min N            # heroes statistically strong/weak on a map
+hots bp <map> -e p1 ... -e p5     # full BP advisor (bans + picks)
 ```
 
 All commands accept `--db <path>` to override the database location.
+
+---
+
+## Maintenance scripts
+
+```bash
+# Refresh the bundled talent-name lookup (run after a HotS patch).
+python scripts/fetch_talent_names.py
+
+# Re-render the multi-res app icon set from icon.svg.
+python scripts/build_icons.py
+```
+
+---
+
+Authorized by 炉石风暴外带一 SB
