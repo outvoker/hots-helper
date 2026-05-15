@@ -266,6 +266,19 @@ class MainWindow(QMainWindow):
         root.addWidget(self.log_box)
         root.addStretch(1)
 
+        # Bottom-right vanity credit. The squad has been asking for
+        # this; just an italic gold-dim line, right-aligned so it
+        # doesn't fight the rest of the layout.
+        credit_row = QHBoxLayout()
+        credit_row.addStretch(1)
+        self.credit_label = QLabel()
+        self.credit_label.setStyleSheet(
+            f"color: {GOLD_DIM}; font-style: italic;"
+            f" font-size: 9pt; padding: 0 4px;"
+        )
+        credit_row.addWidget(self.credit_label)
+        root.addLayout(credit_row)
+
         # --- Runtime: store, workers, hotkey, popup --------------------------
         self._scan_thread: QThread | None = None
         self._scan_worker: ScanWorker | None = None
@@ -542,6 +555,7 @@ class MainWindow(QMainWindow):
         self.aram_btn.setToolTip(t("ui.main.aram_ranking_tip"))
 
         self.log_box.setTitle(t("ui.main.activity"))
+        self.credit_label.setText(t("ui.main.credit"))
 
         # Refresh derived labels that include translated text.
         self._refresh_roots()

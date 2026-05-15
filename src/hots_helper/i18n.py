@@ -154,6 +154,10 @@ _translations: dict[str, dict[str, str]] = {
     },
 
     "ui.main.activity": {"zh": "运行日志", "en": "Activity"},
+    "ui.main.credit": {
+        "zh": "Authorized by 炉石风暴外带一 SB",
+        "en": "Authorized by 炉石风暴外带一 SB",
+    },
     "ui.main.language": {"zh": "界面语言", "en": "Language"},
 
     "ui.main.sync_section": {"zh": "云同步（队伍数据共享）", "en": "Cloud sync"},
