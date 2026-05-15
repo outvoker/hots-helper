@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -310,3 +310,161 @@ class HotkeyWorker(QObject):
             log_lines=log_lines,
         )
         self.finished.emit(result)
+
+
+# --- chat OCR + translate -------------------------------------------------
+
+
+@dataclass
+class ChatTranslationResult:
+    """Outcome of a single chat-OCR + translate run."""
+    screenshot_path: Path | None
+    # Pairs of (original chat line, translated to zh).
+    pairs: list[tuple[str, str]] = field(default_factory=list)
+    # Detected source-language code per row (e.g. "ko", "ja"). Same length
+    # as ``pairs``; empty string if VolcEngine didn't return one.
+    detected_sources: list[str] = field(default_factory=list)
+    log_lines: list[str] = field(default_factory=list)
+    error: str = ""
+
+
+class ChatTranslateWorker(QObject):
+    """Capture screen → OCR → filter to chat region → translate → return.
+
+    Reuses the same OCR engine the BP capture worker uses so we don't
+    pay twice for engine initialisation across the two hotkeys.
+    """
+
+    progress = Signal(str)
+    finished = Signal(object)  # ChatTranslationResult
+
+    def __init__(self, target_lang: str = "zh") -> None:
+        super().__init__()
+        self._target_lang = target_lang
+
+    def run(self) -> None:
+        from ..chat_ocr import extract_chat_lines
+        from ..ocr import recognize
+        from ..translate import TranslateError, translate
+        from .screenshot import capture_fullscreen
+
+        log_lines: list[str] = []
+        screenshot_path: Path | None = None
+
+        # Stage 1: screenshot.
+        t0 = time.monotonic()
+        self.progress.emit("[1/3] Capturing screen…")
+        try:
+            screenshot_path = capture_fullscreen()
+            log_lines.append(f"[1/3] Screenshot: {screenshot_path}")
+        except Exception as e:
+            log_lines.append(
+                f"[1/3 screenshot error] {type(e).__name__}: {e}"
+            )
+            log_lines.append(traceback.format_exc())
+            self.finished.emit(ChatTranslationResult(
+                screenshot_path=None,
+                error=f"截图失败：{e}",
+                log_lines=log_lines,
+            ))
+            return
+
+        # Stage 2: OCR.
+        t1 = time.monotonic()
+        self.progress.emit("[2/3] 识别屏幕文字…")
+        try:
+            blocks = recognize(
+                screenshot_path,
+                progress=lambda m: self.progress.emit(f"      {m}"),
+            )
+            log_lines.append(
+                f"[2/3] OCR returned {len(blocks)} blocks in "
+                f"{time.monotonic() - t1:.1f}s"
+            )
+        except Exception as e:
+            log_lines.append(f"[2/3 OCR error] {type(e).__name__}: {e}")
+            log_lines.append(traceback.format_exc())
+            self.finished.emit(ChatTranslationResult(
+                screenshot_path=screenshot_path,
+                error=f"OCR 失败：{e}",
+                log_lines=log_lines,
+            ))
+            return
+
+        chat = extract_chat_lines(blocks)
+        log_lines.append(
+            f"[2/3] {len(chat)} block(s) match the chat region heuristic"
+        )
+        if not chat:
+            self.finished.emit(ChatTranslationResult(
+                screenshot_path=screenshot_path,
+                pairs=[],
+                log_lines=log_lines,
+            ))
+            return
+
+        # Stage 3: translate.
+        self.progress.emit(f"[3/3] 翻译 {len(chat)} 行聊天…")
+        try:
+            results = translate(
+                [c.text for c in chat],
+                target=self._target_lang,
+                source="auto",
+            )
+        except TranslateError as e:
+            log_lines.append(f"[3/3 translate error] {e}")
+            self.finished.emit(ChatTranslationResult(
+                screenshot_path=screenshot_path,
+                error=f"翻译失败：{e}",
+                log_lines=log_lines,
+            ))
+            return
+
+        pairs = [(c.text, r.text) for c, r in zip(chat, results)]
+        sources = [r.detected_source for r in results]
+        log_lines.append(
+            f"[3/3] Done in {time.monotonic() - t0:.1f}s total"
+        )
+        self.finished.emit(ChatTranslationResult(
+            screenshot_path=screenshot_path,
+            pairs=pairs,
+            detected_sources=sources,
+            log_lines=log_lines,
+        ))
+
+
+# --- compose translate (zh → target) --------------------------------------
+
+
+@dataclass
+class ComposeTranslationResult:
+    text: str = ""
+    error: str = ""
+
+
+class ComposeTranslateWorker(QObject):
+    """Translate one Chinese phrase to one target language. Tiny worker
+    — we still off-thread it so the UI never blocks on the network call."""
+
+    progress = Signal(str)
+    finished = Signal(object)  # ComposeTranslationResult
+
+    def __init__(self, text: str, target: str) -> None:
+        super().__init__()
+        self._text = text
+        self._target = target
+
+    def run(self) -> None:
+        from ..translate import TranslateError, translate
+        try:
+            results = translate(
+                [self._text],
+                target=self._target,
+                source="zh",
+            )
+        except TranslateError as e:
+            self.finished.emit(ComposeTranslationResult(error=str(e)))
+            return
+        self.finished.emit(
+            ComposeTranslationResult(text=results[0].text if results else "")
+        )

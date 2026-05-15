@@ -148,6 +148,11 @@ hiddenimports = [
     "hots_helper.vendor.decoders",
     "hots_helper.data",
     "hots_helper.talent_names",
+    "hots_helper.maps",
+    "hots_helper.translate",
+    "hots_helper.chat_ocr",
+    "hots_helper.ui.translate_popup",
+    "hots_helper.ui.capture_progress",
     # PySide6 modules referenced only lazily
     "PySide6.QtCore",
     "PySide6.QtGui",

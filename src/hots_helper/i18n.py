@@ -99,6 +99,36 @@ _translations: dict[str, dict[str, str]] = {
     },
     "ui.main.settings": {"zh": "高级设置（录像、扫描、同步）", "en": "Advanced settings (replays, scan, sync)"},
 
+    # === Translation popups =============================================
+    "ui.chat_trans.title": {
+        "zh": "公屏聊天翻译",
+        "en": "Chat translation",
+    },
+    "ui.chat_trans.subtitle": {
+        "zh": "已识别公屏聊天 → 自动翻译为中文。点「复制」可粘贴到 Discord 等。",
+        "en": "Detected in-game chat lines, auto-translated to Chinese. Click 复制 to copy.",
+    },
+    "ui.chat_trans.empty": {
+        "zh": "未检测到公屏聊天文字。请确认聊天面板已展开，再按一次快捷键。",
+        "en": "No chat text detected — make sure the chat panel is open and try again.",
+    },
+    "ui.chat_trans.copy": {"zh": "复制", "en": "Copy"},
+
+    "ui.compose_trans.title": {
+        "zh": "中文 → 翻译给队友",
+        "en": "Translate from Chinese",
+    },
+    "ui.compose_trans.target": {"zh": "翻译为：", "en": "Target:"},
+    "ui.compose_trans.send": {"zh": "翻译", "en": "Translate"},
+    "ui.compose_trans.input_placeholder": {
+        "zh": "输入要翻译的中文，回车发送（Shift+回车换行）",
+        "en": "Type Chinese to translate; Enter to submit (Shift+Enter for newline)",
+    },
+    "ui.compose_trans.translating": {
+        "zh": "翻译中…",
+        "en": "Translating…",
+    },
+
     # === Capture progress dialog ========================================
     "ui.capture.title": {
         "zh": "BP 智能分析进行中…",
@@ -234,6 +264,30 @@ _translations: dict[str, dict[str, str]] = {
     "ui.main.watcher_stopped": {"zh": "监听已停止。", "en": "Watcher stopped."},
     "ui.main.hotkey_set": {"zh": "快捷键已设置为：{combo}", "en": "Hotkey set to: {combo}"},
     "ui.main.hotkey_registered": {"zh": "快捷键已注册：{combo}", "en": "Hotkey registered: {combo}"},
+    "ui.main.chat_translate_hotkey_registered": {
+        "zh": "聊天翻译快捷键已注册：{combo}",
+        "en": "Chat-translate hotkey registered: {combo}",
+    },
+    "ui.main.compose_translate_hotkey_registered": {
+        "zh": "中文转译快捷键已注册：{combo}",
+        "en": "Compose-translate hotkey registered: {combo}",
+    },
+    "ui.main.trans_hotkeys_section": {
+        "zh": "翻译快捷键",
+        "en": "Translation hotkeys",
+    },
+    "ui.main.chat_translate_label": {
+        "zh": "公屏聊天翻译：",
+        "en": "Translate game chat:",
+    },
+    "ui.main.compose_translate_label": {
+        "zh": "中文转译给队友：",
+        "en": "Translate from Chinese:",
+    },
+    "ui.main.chat_translate_started": {
+        "zh": "正在截图并翻译公屏聊天…",
+        "en": "Capturing screen and translating chat…",
+    },
     "ui.main.drafting": {"zh": "当前选英雄：{name}", "en": "Currently drafting: {name}"},
     "ui.main.hotkey_busy": {
         "zh": "快捷键被忽略：上次截图分析尚未完成。",

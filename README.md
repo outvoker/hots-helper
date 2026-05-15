@@ -38,6 +38,12 @@ time during the draft.
   → 官方简中名（数据来源：HeroesToolChest gamestrings 镜像）。
 - **Sample mode** — bundled sample BP screenshot lets you see the
   popup without launching a real game.
+- **In-game translation** — two extra hotkeys:
+  - `Ctrl+Shift+T` 截图公屏聊天 → 自动翻译为中文（韩/日/英 → 中），
+    每行带「复制」按钮粘贴到 Discord/笔记。
+  - `Ctrl+Shift+Y` 弹出小输入框 → 中文 → 选择目标语言（en/ko/ja）→ 出译文复制粘贴到游戏聊天框。
+  - 后端走 Supabase Edge Function 中转 VolcEngine 火山翻译；密钥不落地客户端。
+    部署说明见 [`packaging/supabase/README.md`](packaging/supabase/README.md)。
 
 ## Screenshots
 
@@ -74,6 +80,19 @@ Sort by conservative win-rate by default; filter by map (SL ↔ ARAM
 pools auto-switch when you change mode).
 
 ![Hero ranking](docs/screenshots/04-ranking.png)
+
+### In-game translation
+
+`Ctrl+Shift+T` snaps the screen, OCRs the chat panel, and translates
+each line to Chinese. Click 复制 to copy.
+
+![Chat translation popup](docs/screenshots/06-chat-translation.png)
+
+`Ctrl+Shift+Y` opens a small composer for the reverse direction:
+type Chinese, pick a target language (English / 한국어 / 日本語),
+get the translation back ready to paste.
+
+![Compose translation popup](docs/screenshots/07-compose-translation.png)
 
 ---
 

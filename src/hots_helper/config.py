@@ -103,6 +103,13 @@ class Config:
     recording_roots: list[str] = field(default_factory=list)
     # Global hotkey string in pynput canonical form, e.g. "<ctrl>+<shift>+h".
     hotkey: str = "<ctrl>+<shift>+h"
+    # In-game chat translation — OCR the screen, translate every chat
+    # line to Chinese. Default: <ctrl>+<shift>+t (mnemonic: translate).
+    chat_translate_hotkey: str = "<ctrl>+<shift>+t"
+    # Compose-and-translate — open a small input box, user types
+    # Chinese, picks target language, gets translation back to copy.
+    # Default: <ctrl>+<shift>+y (next to T on QWERTY).
+    compose_translate_hotkey: str = "<ctrl>+<shift>+y"
     # If True, run the watcher in the background on UI start.
     auto_watch: bool = True
     # UI locale, "zh" or "en".
@@ -125,6 +132,12 @@ class Config:
         return cls(
             recording_roots=list(raw.get("recording_roots") or []),
             hotkey=str(raw.get("hotkey") or "<ctrl>+<shift>+h"),
+            chat_translate_hotkey=str(
+                raw.get("chat_translate_hotkey") or "<ctrl>+<shift>+t"
+            ),
+            compose_translate_hotkey=str(
+                raw.get("compose_translate_hotkey") or "<ctrl>+<shift>+y"
+            ),
             auto_watch=bool(raw.get("auto_watch", True)),
             language=str(raw.get("language") or "zh"),
             supabase_url=str(raw.get("supabase_url") or ""),

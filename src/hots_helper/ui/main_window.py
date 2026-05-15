@@ -38,6 +38,7 @@ from ..watcher.ingest import IngestResult
 from .capture_progress import CaptureProgressDialog
 from .hotkey import HotkeyManager
 from .popup import PopupWindow
+from .translate_popup import ChatTranslationPopup, ComposeTranslatePopup
 from .theme import (
     BG_DEEP,
     BG_ELEVATED,
@@ -50,7 +51,15 @@ from .theme import (
     TEXT,
     TEXT_DIM,
 )
-from .workers import HotkeyShotResult, HotkeyWorker, ScanWorker, SyncWorker, WatchWorker
+from .workers import (
+    ChatTranslateWorker,
+    ChatTranslationResult,
+    HotkeyShotResult,
+    HotkeyWorker,
+    ScanWorker,
+    SyncWorker,
+    WatchWorker,
+)
 
 
 def _qt_seq_to_pynput(seq: QKeySequence) -> str:
@@ -252,6 +261,39 @@ class MainWindow(QMainWindow):
         sb_outer.addLayout(sb_bot)
         sp.addWidget(self.sync_box)
 
+        # --- Translation hotkeys section --------------------------------
+        # Two extra hotkeys for the chat-OCR + compose-translate flows.
+        # Both show their pynput strings (e.g. "<ctrl>+<shift>+t") in
+        # plain QKeySequenceEdit widgets; the same conversion helpers
+        # the BP hotkey uses apply.
+        self.trans_box = QGroupBox()
+        tb = QVBoxLayout(self.trans_box)
+        chat_row = QHBoxLayout()
+        self.chat_hk_label = QLabel()
+        chat_row.addWidget(self.chat_hk_label)
+        self.chat_hk_edit = QKeySequenceEdit()
+        self.chat_hk_edit.setKeySequence(
+            _pynput_to_qt_seq(self.config.chat_translate_hotkey)
+        )
+        chat_row.addWidget(self.chat_hk_edit, 1)
+        self.chat_hk_apply = QPushButton()
+        self.chat_hk_apply.clicked.connect(self._apply_chat_translate_hotkey)
+        chat_row.addWidget(self.chat_hk_apply)
+        tb.addLayout(chat_row)
+        compose_row = QHBoxLayout()
+        self.compose_hk_label = QLabel()
+        compose_row.addWidget(self.compose_hk_label)
+        self.compose_hk_edit = QKeySequenceEdit()
+        self.compose_hk_edit.setKeySequence(
+            _pynput_to_qt_seq(self.config.compose_translate_hotkey)
+        )
+        compose_row.addWidget(self.compose_hk_edit, 1)
+        self.compose_hk_apply = QPushButton()
+        self.compose_hk_apply.clicked.connect(self._apply_compose_translate_hotkey)
+        compose_row.addWidget(self.compose_hk_apply)
+        tb.addLayout(compose_row)
+        sp.addWidget(self.trans_box)
+
         # Settings panel sits below the toggle, expandable on click.
         self.settings_panel.setVisible(False)
         root.addWidget(self.settings_panel)
@@ -317,8 +359,31 @@ class MainWindow(QMainWindow):
         self.hotkey.triggered.connect(self._on_hotkey)
         self.hotkey.error.connect(lambda msg: self._log(f"[hotkey] {msg}"))
 
+        # Translation hotkeys: each gets its own pynput listener. They
+        # share a single thread internally (pynput's GlobalHotKeys is a
+        # single watcher per registration), and the listeners are
+        # cheap, so wiring one HotkeyManager per purpose is fine.
+        self.chat_translate_hotkey = HotkeyManager()
+        self.chat_translate_hotkey.triggered.connect(self._on_chat_translate_hotkey)
+        self.chat_translate_hotkey.error.connect(
+            lambda m: self._log(f"[chat-trans hotkey] {m}")
+        )
+        self.compose_translate_hotkey = HotkeyManager()
+        self.compose_translate_hotkey.triggered.connect(
+            self._on_compose_translate_hotkey
+        )
+        self.compose_translate_hotkey.error.connect(
+            lambda m: self._log(f"[compose-trans hotkey] {m}")
+        )
+
         self.popup = PopupWindow(self.store)
         self.capture_progress = CaptureProgressDialog(self)
+        # Lazy-create translation popups on first hotkey press.
+        self._chat_trans_popup: ChatTranslationPopup | None = None
+        self._compose_popup: ComposeTranslatePopup | None = None
+        self._chat_trans_thread: QThread | None = None
+        self._chat_trans_worker: ChatTranslateWorker | None = None
+        self._chat_trans_busy = False
 
         # Seed UI from config.
         self._refresh_roots()
@@ -326,6 +391,20 @@ class MainWindow(QMainWindow):
         if self.config.hotkey:
             self.hotkey.set_hotkey(self.config.hotkey)
             self._log(t("ui.main.hotkey_registered", combo=self.config.hotkey))
+        if self.config.chat_translate_hotkey:
+            self.chat_translate_hotkey.set_hotkey(self.config.chat_translate_hotkey)
+            self._log(t(
+                "ui.main.chat_translate_hotkey_registered",
+                combo=self.config.chat_translate_hotkey,
+            ))
+        if self.config.compose_translate_hotkey:
+            self.compose_translate_hotkey.set_hotkey(
+                self.config.compose_translate_hotkey
+            )
+            self._log(t(
+                "ui.main.compose_translate_hotkey_registered",
+                combo=self.config.compose_translate_hotkey,
+            ))
         if self.watch_chk.isChecked():
             self._start_watching()
         # Kick off a startup sync if the user has configured cloud creds.
@@ -556,6 +635,12 @@ class MainWindow(QMainWindow):
 
         self.log_box.setTitle(t("ui.main.activity"))
         self.credit_label.setText(t("ui.main.credit"))
+
+        self.trans_box.setTitle(t("ui.main.trans_hotkeys_section"))
+        self.chat_hk_label.setText(t("ui.main.chat_translate_label"))
+        self.compose_hk_label.setText(t("ui.main.compose_translate_label"))
+        self.chat_hk_apply.setText(t("ui.main.apply"))
+        self.compose_hk_apply.setText(t("ui.main.apply"))
 
         # Refresh derived labels that include translated text.
         self._refresh_roots()
@@ -891,6 +976,90 @@ class MainWindow(QMainWindow):
             screenshot_path=result.screenshot_path,
         )
 
+    # --- translation hotkey config ----------------------------------------
+
+    def _apply_chat_translate_hotkey(self) -> None:
+        seq = self.chat_hk_edit.keySequence()
+        combo = _qt_seq_to_pynput(seq)
+        if not combo:
+            QMessageBox.warning(
+                self,
+                t("ui.main.invalid_hotkey_title"),
+                t("ui.main.invalid_hotkey_body"),
+            )
+            return
+        self.config.chat_translate_hotkey = combo
+        self.config.save()
+        self.chat_translate_hotkey.set_hotkey(combo)
+        self._log(t("ui.main.chat_translate_hotkey_registered", combo=combo))
+
+    def _apply_compose_translate_hotkey(self) -> None:
+        seq = self.compose_hk_edit.keySequence()
+        combo = _qt_seq_to_pynput(seq)
+        if not combo:
+            QMessageBox.warning(
+                self,
+                t("ui.main.invalid_hotkey_title"),
+                t("ui.main.invalid_hotkey_body"),
+            )
+            return
+        self.config.compose_translate_hotkey = combo
+        self.config.save()
+        self.compose_translate_hotkey.set_hotkey(combo)
+        self._log(t("ui.main.compose_translate_hotkey_registered", combo=combo))
+
+    # --- chat translation hotkey -------------------------------------------
+
+    def _on_chat_translate_hotkey(self) -> None:
+        if self._chat_trans_busy:
+            self._log(t("ui.main.hotkey_busy"))
+            return
+        if self._chat_trans_popup is None:
+            self._chat_trans_popup = ChatTranslationPopup()
+        self._chat_trans_busy = True
+        self.capture_progress.start(anchor=self)
+        self._log(t("ui.main.chat_translate_started"))
+
+        thread = QThread(self)
+        worker = ChatTranslateWorker(target_lang="zh")
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._log)
+        worker.progress.connect(self.capture_progress.update_substatus)
+        worker.finished.connect(self._on_chat_translate_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(self._cleanup_chat_translate_thread)
+        self._chat_trans_thread = thread
+        self._chat_trans_worker = worker
+        thread.start()
+
+    def _cleanup_chat_translate_thread(self) -> None:
+        if self._chat_trans_worker is not None:
+            self._chat_trans_worker.deleteLater()
+            self._chat_trans_worker = None
+        if self._chat_trans_thread is not None:
+            self._chat_trans_thread.deleteLater()
+            self._chat_trans_thread = None
+        self._chat_trans_busy = False
+
+    def _on_chat_translate_finished(self, result: ChatTranslationResult) -> None:
+        for line in result.log_lines:
+            self._log(line)
+        ok = bool(result.pairs) and not result.error
+        self.capture_progress.finish(
+            ok=ok,
+            message=result.error if result.error else None,
+        )
+        if self._chat_trans_popup is not None:
+            self._chat_trans_popup.show_result(result)
+
+    # --- compose translate hotkey -------------------------------------------
+
+    def _on_compose_translate_hotkey(self) -> None:
+        if self._compose_popup is None:
+            self._compose_popup = ComposeTranslatePopup()
+        self._compose_popup.open_centered()
+
     # --- stats ---------------------------------------------------------------
 
     def _refresh_stats(self) -> None:
@@ -908,15 +1077,24 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         self.watch_worker.stop()
         self.hotkey.stop()
+        self.chat_translate_hotkey.stop()
+        self.compose_translate_hotkey.stop()
         if self._scan_thread is not None:
             self._scan_thread.quit()
             self._scan_thread.wait(5000)
         if self._hotkey_thread is not None:
             self._hotkey_thread.quit()
             self._hotkey_thread.wait(3000)
+        if self._chat_trans_thread is not None:
+            self._chat_trans_thread.quit()
+            self._chat_trans_thread.wait(3000)
         if self._sync_thread is not None:
             self._sync_thread.quit()
             self._sync_thread.wait(3000)
         if self.popup is not None:
             self.popup.close()
+        if self._chat_trans_popup is not None:
+            self._chat_trans_popup.close()
+        if self._compose_popup is not None:
+            self._compose_popup.close()
         super().closeEvent(event)
