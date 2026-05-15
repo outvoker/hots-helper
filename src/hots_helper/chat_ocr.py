@@ -31,10 +31,15 @@ from .ocr import OcrBlock
 
 
 # Normalised chat panel — x0/y0/x1/y1 fractions of the screen.
-# The bottom-left corner where the chat scroll lives.  Generous on the
-# right edge because the chat input wraps over the central HUD; tight
-# on the top to drop nameplate/voice-chat overlays.
-CHAT_REGION = (0.00, 0.65, 0.45, 0.94)
+#
+# Empirically the in-game chat scroll sits in the bottom-center of the
+# screen, just above the chat input box. On 1080p the message area
+# centers around (x≈0.5, y≈0.78) and is roughly 0.45 wide.  We use a
+# generous box because resolution / UI scale move things around;
+# heuristic text filters in :func:`_looks_like_chat` clean up the
+# false-positives (HUD timers, ping count, the chat *input* placeholder
+# "按下回车键或'/'键开始聊天" itself, etc.).
+CHAT_REGION = (0.25, 0.62, 0.78, 0.92)
 
 
 @dataclass
@@ -49,6 +54,30 @@ _CHANNEL_TAG_RE = re.compile(r"^\[[^\]]{1,12}\]$")
 # Pure-numeric or pure-symbolic tokens — HUD timers ("00:42"), merc
 # camp counters ("3"), minimap pings ("!"), etc.
 _NON_TEXT_RE = re.compile(r"^[\s\d:./\-+]+$")
+# Substrings that mark *chat-adjacent UI* — the input-box placeholder,
+# BP-screen buttons that fall inside our chat region, etc. Anything
+# containing one of these exact tokens is dropped. Keep this list
+# short and Chinese-canonical (CN client) — adding aggressive English
+# filters risks dropping real chat that quotes UI labels.
+_INPUT_PLACEHOLDERS = (
+    "按下回车键",
+    "按回车键",
+    "Press Enter",
+    "press enter",
+    "/键开始聊天",
+    "to chat",
+    # BP-screen artefacts that overlap our chat region.
+    "查看所有英雄",          # "View all heroes" button
+    "正在等待敌方禁用英雄",  # status banner during enemy ban
+    "正在等待队伍禁用英雄",  # status banner during ally ban
+    "正在选择禁用英雄",      # drafter status text
+    "正在选择英雄",
+    # Voice chat status, kicker / joiner system messages — these
+    # *are* legitimate game chat, but they're system-generated and
+    # not what the user wants translated. Kept narrow on purpose.
+    "团队语音可用",
+    "加入团队语音",
+)
 
 
 def _in_chat_region(block: OcrBlock) -> bool:
@@ -67,6 +96,9 @@ def _looks_like_chat(text: str) -> bool:
         return False
     if _NON_TEXT_RE.match(s):
         return False
+    for placeholder in _INPUT_PLACEHOLDERS:
+        if placeholder in s:
+            return False
     # Must contain at least one alphabetic / CJK character somewhere.
     for ch in s:
         if ch.isalpha():
@@ -77,6 +109,23 @@ def _looks_like_chat(text: str) -> bool:
 def extract_chat_lines(blocks: list[OcrBlock]) -> list[ChatLine]:
     """Pick out chat lines from a list of OCR blocks (sorted top→bottom)."""
     candidates = [b for b in blocks if _in_chat_region(b) and _looks_like_chat(b.text)]
+    candidates.sort(key=lambda b: ((b.bbox[1] + b.bbox[3]) / 2))
+    return [
+        ChatLine(text=b.text.strip(), bbox=b.bbox, confidence=b.confidence)
+        for b in candidates
+    ]
+
+
+def filter_chat_blocks(blocks: list[OcrBlock]) -> list[ChatLine]:
+    """Apply only the *content* heuristics (no region check) to a list of
+    blocks the user already cropped down to the chat area manually.
+
+    Used by the "redraw chat region" path in the translation popup —
+    once the user has dragged a tight box, every block in that box is
+    presumed to be inside the chat panel, so the region check would
+    be redundant (and on small crops, occasionally too strict).
+    """
+    candidates = [b for b in blocks if _looks_like_chat(b.text)]
     candidates.sort(key=lambda b: ((b.bbox[1] + b.bbox[3]) / 2))
     return [
         ChatLine(text=b.text.strip(), bbox=b.bbox, confidence=b.confidence)

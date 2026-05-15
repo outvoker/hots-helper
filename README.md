@@ -83,8 +83,11 @@ pools auto-switch when you change mode).
 
 ### In-game translation
 
-`Ctrl+Shift+T` snaps the screen, OCRs the chat panel, and translates
-each line to Chinese. Click 复制 to copy.
+`Ctrl+Shift+T` snaps the screen, OCRs the chat panel (bottom-center
+region by default), and translates each line to Chinese. Click 复制 to
+copy. If the heuristic missed something or grabbed a non-chat label,
+hit 🎯 重新框选 and drag a tighter rectangle on the original
+screenshot — the popup re-OCRs and re-translates that exact region.
 
 ![Chat translation popup](docs/screenshots/06-chat-translation.png)
 

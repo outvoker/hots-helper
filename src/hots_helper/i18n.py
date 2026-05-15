@@ -113,6 +113,15 @@ _translations: dict[str, dict[str, str]] = {
         "en": "No chat text detected — make sure the chat panel is open and try again.",
     },
     "ui.chat_trans.copy": {"zh": "复制", "en": "Copy"},
+    "ui.chat_trans.redraw": {"zh": "🎯 重新框选", "en": "🎯 Redraw region"},
+    "ui.chat_trans.redraw_tip": {
+        "zh": "在原始截图上手动框选聊天区域，重新识别+翻译。",
+        "en": "Manually drag a rectangle over the chat panel on the original screenshot to re-OCR and re-translate.",
+    },
+    "ui.chat_trans.redrawing": {
+        "zh": "正在按你框选的区域重新识别和翻译…",
+        "en": "Re-running OCR + translate on your selected region…",
+    },
 
     "ui.compose_trans.title": {
         "zh": "中文 → 翻译给队友",
