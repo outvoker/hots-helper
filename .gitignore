@@ -32,5 +32,10 @@ test.png
 /screenshots/
 *.StormReplay
 
+# Supabase CLI working state — these files are written by the local
+# CLI and have nothing to do with the function source we ship.
+supabase/.temp/
+supabase/.branches/
+
 # English report — Chinese is the canonical version
 REPORT.md
