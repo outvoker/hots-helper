@@ -7,7 +7,48 @@ the Qt main thread (which is required for any UI work).
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QObject, Signal
+
+
+def _patch_pyobjc_axistrusted_lookup() -> None:
+    """Workaround for a PyObjC ≥ 11 lazy-import bug on macOS.
+
+    pynput's keyboard listener calls ``HIServices.AXIsProcessTrusted()``
+    on its background thread. Recent PyObjC versions register the
+    function name in ``HIServices``'s lazy table but ``get_constant``
+    raises ``KeyError: 'AXIsProcessTrusted'`` on first access. The
+    function lives — and is identical — in ``ApplicationServices``,
+    so we eagerly import it from there and bind it onto
+    ``HIServices`` before pynput touches it.
+
+    Skipped on non-darwin and quietly no-ops if PyObjC isn't installed
+    (e.g. the Windows / Linux build where pynput uses a different
+    backend altogether).
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import HIServices
+        import ApplicationServices
+    except Exception:
+        return
+    if hasattr(HIServices, "_axistrusted_patched"):
+        return
+    fn = getattr(ApplicationServices, "AXIsProcessTrusted", None)
+    if fn is None:
+        return
+    try:
+        # Inject directly into the module so lazy ``__getattr__``
+        # never fires for this name again.
+        HIServices.AXIsProcessTrusted = fn
+        HIServices._axistrusted_patched = True
+    except Exception:
+        pass
+
+
+_patch_pyobjc_axistrusted_lookup()
 
 try:
     from pynput import keyboard
