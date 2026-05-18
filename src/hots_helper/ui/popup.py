@@ -1056,17 +1056,13 @@ class PopupWindow(QWidget):
         is loud enough to warn about.
         """
         try:
-            top, extras = compute_player_rankings(
-                self.store, min_games=5, limit=10_000,
+            ranked = compute_player_rankings(
+                self.store, min_games=5,
             )
         except Exception:
             # DB hiccups shouldn't tank the whole BP flow — the flag
             # is a nice-to-have, not load-bearing.
-            top, extras = [], []
-        # We pulled with a huge limit so ``top`` already contains
-        # every player; ``extras`` is empty in that case but the
-        # union is still the right shape for the index.
-        ranked = top + extras
+            ranked = []
         self._ranked_by_handle: dict[str, PlayerRankRow] = {
             p.toon_handle: p for p in ranked if p.toon_handle
         }

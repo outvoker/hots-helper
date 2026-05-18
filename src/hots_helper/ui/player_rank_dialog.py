@@ -130,7 +130,9 @@ class PlayerRankDialog(QDialog):
         self.limit_spin.setRange(10, 500)
         self.limit_spin.setSingleStep(10)
         self.limit_spin.setValue(50)
-        self.limit_spin.valueChanged.connect(self._reload)
+        # Limit only changes how many cached rows we display — no DB
+        # round-trip needed.
+        self.limit_spin.valueChanged.connect(self._render_table)
         head.addWidget(self.limit_spin)
 
         self.power_help_btn = QPushButton()
@@ -191,10 +193,12 @@ class PlayerRankDialog(QDialog):
         self.table.verticalHeader().setVisible(True)
         root.addWidget(self.table, 1)
 
-        # Cache so a header click doesn't have to re-query the DB.
-        # Repopulated on every _reload.
-        self._cached_top: list[PlayerRankRow] = []
-        self._cached_extras: list[PlayerRankRow] = []
+        # Cache the full sorted-by-power population so a header click
+        # can re-slice without re-querying the DB. Each row's
+        # ``rank`` is fixed to its global power-rank (#1..#N), so the
+        # rank cell still shows the player's overall standing even
+        # when the user is currently sorting by a different column.
+        self._cached_all: list[PlayerRankRow] = []
 
         self.footer_label = QLabel()
         self.footer_label.setTextFormat(Qt.RichText)
@@ -270,69 +274,69 @@ class PlayerRankDialog(QDialog):
 
     def _reload_inner(self) -> None:
         min_games = self.min_games_spin.value()
-        limit = self.limit_spin.value()
         hero = self.hero_combo.currentData()  # None = all heroes
 
-        top, extras = compute_player_rankings(
+        all_rows = compute_player_rankings(
             self.store,
             min_games=min_games,
-            limit=limit,
             hero=hero,
         )
-        # Squad set so we can tint our own rows in the table — makes
-        # it easy to see at a glance who in the 5-stack is over- or
-        # under-performing relative to the random handles we've
-        # queued with.
+        # Squad set so we can tint our own rows in the table.
         self._squad_set: set[str] = set(self.store.squad_handles())
+        self._cached_all = all_rows
         if hero:
             self.summary.setText(
                 t("ui.rank.summary_hero",
-                  hero=hero, count=len(top), min_games=min_games)
+                  hero=hero, count=len(all_rows), min_games=min_games)
             )
         else:
             self.summary.setText(
                 t("ui.rank.summary_total",
-                  count=len(top), min_games=min_games)
+                  count=len(all_rows), min_games=min_games)
             )
-        self._fill_table(top, extras)
-
-    def _fill_table(
-        self,
-        rows: list[PlayerRankRow],
-        extras: list[PlayerRankRow],
-    ) -> None:
-        """Render top-N slice + squad extras into the single table.
-
-        We sort the slice in Python (driven by ``_sort_col`` /
-        ``_sort_desc`` the user picked via the header) and append the
-        extras unsorted at the end. Cache is updated so a future
-        header click can re-render without re-querying the DB.
-        """
-        self._cached_top = list(rows)
-        self._cached_extras = list(extras)
         self._render_table()
 
     def _render_table(self) -> None:
-        """Re-paint the table from the cached top + extras using the
-        current sort column / direction. Top section is sorted;
-        extras section is appended after, in the order the SQL
-        returned them (which preserves the real-rank ordering we set
-        in ``compute_player_rankings``).
+        """Re-paint the table from ``self._cached_all``.
+
+        The visible slice is the top ``limit`` rows by the *currently
+        selected sort column*. Click "胜率" desc and the slice is the
+        50 highest-WR players overall, not just "the 50 highest-power
+        players sorted by WR within themselves".
+
+        Squad members who don't make that slice (because they're not
+        extreme on the chosen metric) get pinned at the bottom in a
+        separate group, with their global rank preserved.
         """
         tbl = self.table
-        # Sort the top slice. Name column sorts by text; everything
-        # else sorts numerically by the underlying ``sort_value`` we
-        # stash on each cell.
-        sorted_top = sorted(
-            self._cached_top,
+        limit = self.limit_spin.value()
+
+        if not self._cached_all:
+            tbl.setRowCount(0)
+            return
+
+        sorted_all = sorted(
+            self._cached_all,
             key=lambda p: self._sort_key(p),
             reverse=self._sort_desc,
         )
-        all_rows = sorted_top + self._cached_extras
-        tbl.setRowCount(len(all_rows))
-        n_top = len(sorted_top)
-        for i, p in enumerate(all_rows):
-            self._fill_row(tbl, i, p, is_extra=(i >= n_top))
+        slice_rows = sorted_all[:limit]
+        slice_handles = {p.toon_handle for p in slice_rows}
+        # Extras = squad members not already in the slice. Order them
+        # by their global power rank (small rank number first) so the
+        # pinned section reads naturally even for heavy slicing.
+        extras = sorted(
+            (p for p in self._cached_all
+             if p.toon_handle in self._squad_set
+             and p.toon_handle not in slice_handles),
+            key=lambda p: p.rank,
+        )
+
+        all_visible = slice_rows + extras
+        tbl.setRowCount(len(all_visible))
+        n_slice = len(slice_rows)
+        for i, p in enumerate(all_visible):
+            self._fill_row(tbl, i, p, is_extra=(i >= n_slice))
 
     # Column → key extractor for Python-side sorting. Power is the
     # default fallback so an unknown column doesn't blow up.
