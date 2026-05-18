@@ -56,7 +56,12 @@ from ..db import Store
 from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
 from ..maps import all_maps
-from ..player_rank import PlayerRankRow, compute_rankings
+from ..player_rank import (
+    BOARD_BEST_OPPONENT,
+    BOARD_WORST_TEAMMATE,
+    PlayerRankRow,
+    compute_board,
+)
 from ..talent_names import talent_label
 from .macos_overlay import make_overlay_floating
 from .theme import (
@@ -1035,8 +1040,13 @@ class PopupWindow(QWidget):
         sizes get noisy and the flag is more annoying than useful.
         """
         try:
-            worst, best = compute_rankings(
-                self.store, min_games=5, limit=30,
+            worst = compute_board(
+                self.store, BOARD_WORST_TEAMMATE,
+                min_games=5, limit=30,
+            )
+            best = compute_board(
+                self.store, BOARD_BEST_OPPONENT,
+                min_games=5, limit=30,
             )
         except Exception:
             # Database hiccups shouldn't bring down the whole BP flow —

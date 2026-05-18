@@ -581,30 +581,44 @@ class Store:
 
     # --- player rankings ----------------------------------------------------
 
-    def player_rankings(
+    def player_rankings_vs_squad(
         self,
+        squad_handles: tuple[str, ...],
         *,
+        side: str = "teammate",
         min_games: int = 5,
         limit: int = 200,
-        exclude_handles: tuple[str, ...] = (),
         mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
     ) -> list[sqlite3.Row]:
-        """All players who appear in ``mode_filter`` games (excluding
-        ``exclude_handles``), aggregated for the "kingmakers / boogeymen"
-        boards.
+        """Per-player aggregate restricted to games involving the squad.
 
-        The squad's own handles are excluded so the ranking is "everyone
-        we've ever encountered" rather than "us plus everyone else". The
-        caller (the leaderboard dialog) supplies the exclude set.
+        ``side="teammate"`` → only count games where this player was on
+        the *same* team as the squad ("how often did they win for us?").
+        ``side="opponent"`` → games where they were on the *other* team
+        ("how often did they beat us?").
+
+        Each row's ``games`` and ``wins`` are still per-match counts;
+        ``result = 1`` already means "this player's team won", which is
+        the right framing for both boards (they win with us → we win
+        together; they win against us → they beat us).
+
+        Squad members themselves are excluded so the boards are "people
+        we've encountered" rather than "us + everyone else".
         """
-        clause, mode_params = _mode_clause(mode_filter)
-        excl_clause = ""
-        excl_params: list[Any] = []
-        if exclude_handles:
-            placeholders = ",".join("?" for _ in exclude_handles)
-            excl_clause = f" AND pm.toon_handle NOT IN ({placeholders})"
-            excl_params = list(exclude_handles)
+        if side not in ("teammate", "opponent"):
+            raise ValueError(f"unknown side: {side!r}")
+        if not squad_handles:
+            return []
 
+        clause, mode_params = _mode_clause(mode_filter)
+        squad_placeholders = ",".join("?" for _ in squad_handles)
+        team_op = "=" if side == "teammate" else "!="
+        # We use MIN(team) as a proxy for "the team the squad was on
+        # in this match". A 5-stack always queues onto a single team,
+        # so MIN == MAX in practice. If a squad member ever ends up on
+        # the opposite team via solo-queue, MIN picks one side and the
+        # others count as opponents — acceptable noise in a feature
+        # that's already best-effort.
         return self.conn.execute(
             f"""
             SELECT pm.toon_handle,
@@ -620,14 +634,28 @@ class Store:
                    MAX(r.played_at)     AS last_seen_at
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
+            JOIN (
+                SELECT replay_id, MIN(team) AS our_team
+                FROM player_match
+                WHERE toon_handle IN ({squad_placeholders})
+                GROUP BY replay_id
+            ) otm ON otm.replay_id = pm.replay_id
             LEFT JOIN players p ON p.toon_handle = pm.toon_handle
-            WHERE 1=1{clause}{excl_clause}
+            WHERE pm.toon_handle NOT IN ({squad_placeholders})
+              AND pm.team {team_op} otm.our_team
+              {clause}
             GROUP BY pm.toon_handle
             HAVING COUNT(*) >= ?
             ORDER BY games DESC
             LIMIT ?
             """,
-            (*mode_params, *excl_params, min_games, limit),
+            (
+                *squad_handles,
+                *squad_handles,
+                *mode_params,
+                min_games,
+                limit,
+            ),
         ).fetchall()
 
     def squad_handles(

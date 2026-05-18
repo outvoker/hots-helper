@@ -1,14 +1,15 @@
 """Player rank leaderboards.
 
-Two side-by-side tables:
-* **最坑队友** — players the squad has met whose Storm League win rate
-  is the lowest (Wilson 95% lower bound). When one of these handles
-  shows up as an ally next game, the BP popup also lights them up.
-* **最强对手** — same data, sorted the other way. Highlights cards on
-  the enemy side of the BP popup.
+A single table with a dropdown that switches between four views:
+* 🪦 最坑队友  (worst WR while playing on our side)
+* 🤝 最强队友  (highest WR while playing on our side)
+* 👑 最强对手  (highest WR while playing against us)
+* 🎯 最弱对手  (lowest WR while playing against us)
 
-Both lists exclude the squad's own handles by default (heuristically:
-anyone in our DB with 20+ games of replay history is one of us).
+The "side" (teammate vs opponent) is determined per match by which
+team the squad's heuristic-detected handles were on. The board you
+pick controls how those per-side records are sorted (Wilson 95% lower
+bound on win-rate, ascending or descending).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -31,7 +32,15 @@ from PySide6.QtWidgets import (
 
 from ..db import Store
 from ..i18n import on_change as on_lang_change, t
-from ..player_rank import PlayerRankRow, compute_rankings
+from ..player_rank import (
+    ALL_BOARDS,
+    BOARD_BEST_OPPONENT,
+    BOARD_BEST_TEAMMATE,
+    BOARD_WORST_OPPONENT,
+    BOARD_WORST_TEAMMATE,
+    PlayerRankRow,
+    compute_board,
+)
 
 
 def _fmt_k(value: float) -> str:
@@ -42,19 +51,25 @@ def _fmt_k(value: float) -> str:
     return f"{value:.0f}"
 
 
+# Maps each board id → ("title i18n key", row tint colour for top-3).
+_BOARD_META: dict[str, tuple[str, QColor]] = {
+    BOARD_WORST_TEAMMATE: ("ui.rank.board_worst_teammate", QColor(230, 110, 110)),
+    BOARD_BEST_TEAMMATE:  ("ui.rank.board_best_teammate",  QColor(120, 220, 120)),
+    BOARD_BEST_OPPONENT:  ("ui.rank.board_best_opponent",  QColor(255, 200, 100)),
+    BOARD_WORST_OPPONENT: ("ui.rank.board_worst_opponent", QColor(140, 200, 230)),
+}
+
+
 class PlayerRankDialog(QDialog):
-    """Dual-table dialog: worst teammates / best opponents."""
+    """Single-table dialog with a board-selector dropdown."""
 
     def __init__(self, store: Store, parent=None) -> None:
         super().__init__(parent)
         self.store = store
-        # 1180×720 used to clip Korean / Chinese display names because
-        # the name column stretched into ~100px after the eight
-        # numeric columns took their share on each side. 1480×800
-        # gives the name columns a comfortable ~220px each at the
-        # default split.
-        self.setMinimumSize(1180, 720)
-        self.resize(1480, 800)
+        # Single table — narrower than the side-by-side layout used to
+        # be, but the name column is comfortable now.
+        self.setMinimumSize(900, 620)
+        self.resize(1100, 720)
         self._build_ui()
         self._retranslate()
         on_lang_change(lambda _c: self._on_lang())
@@ -69,6 +84,14 @@ class PlayerRankDialog(QDialog):
         self.title.setProperty("role", "title")
         head.addWidget(self.title)
         head.addStretch(1)
+
+        self.board_label = QLabel()
+        head.addWidget(self.board_label)
+        self.board_combo = QComboBox()
+        for board in ALL_BOARDS:
+            self.board_combo.addItem("", board)
+        self.board_combo.currentIndexChanged.connect(lambda _i: self._reload())
+        head.addWidget(self.board_combo)
 
         self.min_games_label = QLabel()
         head.addWidget(self.min_games_label)
@@ -86,10 +109,6 @@ class PlayerRankDialog(QDialog):
         self.limit_spin.valueChanged.connect(self._reload)
         head.addWidget(self.limit_spin)
 
-        self.include_squad_chk = QCheckBox()
-        self.include_squad_chk.stateChanged.connect(lambda _s: self._reload())
-        head.addWidget(self.include_squad_chk)
-
         self.close_btn = QPushButton()
         self.close_btn.clicked.connect(self.close)
         head.addWidget(self.close_btn)
@@ -99,74 +118,50 @@ class PlayerRankDialog(QDialog):
         self.summary.setStyleSheet("padding: 4px 0; color: #b8c7d9;")
         root.addWidget(self.summary)
 
-        # Two tables side by side. Same column shape so the layout stays
-        # symmetric.
-        tables_row = QHBoxLayout()
-        tables_row.setSpacing(10)
-
-        self.worst_box, self.worst_title, self.worst_table = self._build_table_box()
-        self.best_box, self.best_title, self.best_table = self._build_table_box()
-        tables_row.addWidget(self.worst_box, 1)
-        tables_row.addWidget(self.best_box, 1)
-        root.addLayout(tables_row, 1)
-
-        self.footer_label = QLabel()
-        self.footer_label.setTextFormat(Qt.RichText)
-        self.footer_label.setWordWrap(True)
-        root.addWidget(self.footer_label)
-
-    def _build_table_box(self) -> tuple[QVBoxLayout, QLabel, QTableWidget]:
-        # Wrap in a vertical layout with a section title above the table.
-        from PySide6.QtWidgets import QWidget
-        box = QWidget()
-        v = QVBoxLayout(box)
-        v.setContentsMargins(0, 0, 0, 0)
-        title = QLabel()
-        title.setProperty("role", "title")
-        title.setFont(QFont("", 12, QFont.Bold))
-        v.addWidget(title)
-
-        tbl = QTableWidget()
-        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
-        tbl.setAlternatingRowColors(True)
-        tbl.setSortingEnabled(False)
-        # rank | name | games | wins | wr | wlb | kda | hd | hl
+        # Single table.
+        self.table = QTableWidget()
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(False)
         self._col_keys = [
             "ui.rank.col_rank", "ui.rank.col_name", "ui.rank.col_games",
             "ui.rank.col_wins", "ui.rank.col_wr", "ui.rank.col_wlb",
             "ui.rank.col_kda", "ui.rank.col_hero_dmg",
             "ui.rank.col_healing",
         ]
-        tbl.setColumnCount(len(self._col_keys))
+        self.table.setColumnCount(len(self._col_keys))
         for i in range(len(self._col_keys)):
-            tbl.horizontalHeader().setSectionResizeMode(
+            self.table.horizontalHeader().setSectionResizeMode(
                 i, QHeaderView.ResizeToContents
             )
-        # The name column gets the leftover space — but ResizeToContents
-        # alone collapses long Korean / Chinese handles into ellipsis,
-        # because Qt sums the header pre-elide width. Set an explicit
-        # minimum and Stretch policy so the column always has at least
-        # ~200px and grows when the dialog is widened.
-        tbl.horizontalHeader().setSectionResizeMode(
+        # Name column stretches; the other columns hug content.
+        self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.Stretch
         )
-        tbl.horizontalHeader().setMinimumSectionSize(40)
-        tbl.setColumnWidth(1, 220)
-        v.addWidget(tbl, 1)
-        return box, title, tbl
+        self.table.horizontalHeader().setMinimumSectionSize(40)
+        self.table.setColumnWidth(1, 260)
+        root.addWidget(self.table, 1)
+
+        self.footer_label = QLabel()
+        self.footer_label.setTextFormat(Qt.RichText)
+        self.footer_label.setWordWrap(True)
+        root.addWidget(self.footer_label)
 
     def _retranslate(self) -> None:
         self.setWindowTitle(t("ui.rank.window_title"))
         self.title.setText(t("ui.rank.title"))
+        self.board_label.setText(t("ui.rank.board"))
+        for i in range(self.board_combo.count()):
+            board = self.board_combo.itemData(i)
+            key, _tone = _BOARD_META.get(
+                board, ("ui.rank.board_worst_teammate", QColor(220, 220, 220))
+            )
+            self.board_combo.setItemText(i, t(key))
         self.min_games_label.setText(t("ui.aram.min_games"))
         self.limit_label.setText(t("ui.rank.limit_label"))
-        self.include_squad_chk.setText(t("ui.rank.include_squad"))
         self.close_btn.setText(t("ui.aram.close"))
-        self.worst_title.setText(t("ui.rank.worst_title"))
-        self.best_title.setText(t("ui.rank.best_title"))
-        for tbl in (self.worst_table, self.best_table):
-            tbl.setHorizontalHeaderLabels([t(k) for k in self._col_keys])
+        self.table.setHorizontalHeaderLabels([t(k) for k in self._col_keys])
         self.footer_label.setText(t("ui.rank.footer"))
 
     def _on_lang(self) -> None:
@@ -185,30 +180,31 @@ class PlayerRankDialog(QDialog):
             traceback.print_exc()
 
     def _reload_inner(self) -> None:
+        board = self.board_combo.currentData() or BOARD_WORST_TEAMMATE
         min_games = self.min_games_spin.value()
         limit = self.limit_spin.value()
-        include_squad = self.include_squad_chk.isChecked()
-        worst, best = compute_rankings(
+
+        rows = compute_board(
             self.store,
+            board,
             min_games=min_games,
             limit=limit,
-            include_squad=include_squad,
         )
+        board_label = self.board_combo.currentText()
         self.summary.setText(
-            t("ui.rank.summary",
-              worst=len(worst), best=len(best),
-              min_games=min_games)
+            t("ui.rank.summary_single",
+              board=board_label, count=len(rows), min_games=min_games)
         )
-        self._fill_table(self.worst_table, worst, mode="worst")
-        self._fill_table(self.best_table, best, mode="best")
+        _, tone = _BOARD_META.get(board, ("", QColor(220, 220, 220)))
+        self._fill_table(rows, tone=tone)
 
     def _fill_table(
         self,
-        tbl: QTableWidget,
         rows: list[PlayerRankRow],
         *,
-        mode: str,
+        tone: QColor,
     ) -> None:
+        tbl = self.table
         tbl.setRowCount(len(rows))
         for i, p in enumerate(rows):
             cells = [
@@ -227,13 +223,10 @@ class PlayerRankDialog(QDialog):
                 item.setTextAlignment(
                     Qt.AlignVCenter | (Qt.AlignLeft if j == 1 else Qt.AlignRight)
                 )
-                # Tint top-3 rows so the worst-of-the-worst / best-of-the-best
-                # stand out without needing to read the rank column.
+                # Top-3 rows get the board-specific tint so the
+                # standout entries pop without reading the rank column.
                 if p.rank <= 3:
-                    if mode == "worst":
-                        item.setForeground(QColor(230, 110, 110))
-                    else:
-                        item.setForeground(QColor(255, 200, 100))
+                    item.setForeground(tone)
                 else:
                     item.setForeground(QColor(220, 220, 220))
                 tbl.setItem(i, j, item)

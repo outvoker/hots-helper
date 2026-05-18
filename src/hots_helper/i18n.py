@@ -368,25 +368,33 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "玩家排行榜",
         "en": "Player rankings",
     },
-    "ui.rank.worst_title": {
-        "zh": "🪦 最坑队友（胜率最低）",
-        "en": "🪦 Worst teammates (lowest win rate)",
+    "ui.rank.board": {
+        "zh": "榜单",
+        "en": "Board",
     },
-    "ui.rank.best_title": {
-        "zh": "👑 最强对手（胜率最高）",
-        "en": "👑 Strongest opponents (highest win rate)",
+    "ui.rank.board_worst_teammate": {
+        "zh": "🪦 最坑队友（同队胜率最低）",
+        "en": "🪦 Worst teammates (lowest win rate as ally)",
+    },
+    "ui.rank.board_best_teammate": {
+        "zh": "🤝 最强队友（同队胜率最高）",
+        "en": "🤝 Best teammates (highest win rate as ally)",
+    },
+    "ui.rank.board_best_opponent": {
+        "zh": "👑 最强对手（对面胜率最高）",
+        "en": "👑 Strongest opponents (highest win rate against us)",
+    },
+    "ui.rank.board_worst_opponent": {
+        "zh": "🎯 最弱对手（对面胜率最低）",
+        "en": "🎯 Weakest opponents (lowest win rate against us)",
     },
     "ui.rank.limit_label": {
         "zh": "显示前",
         "en": "Show top",
     },
-    "ui.rank.include_squad": {
-        "zh": "包含我方常驻玩家",
-        "en": "Include squad members",
-    },
-    "ui.rank.summary": {
-        "zh": "最少 {min_games} 局起算 · 坑队友 {worst} 人 · 强对手 {best} 人",
-        "en": "{min_games}+ games · {worst} worst teammates · {best} strongest opponents",
+    "ui.rank.summary_single": {
+        "zh": "{board} · {count} 人 · 最少 {min_games} 局起算",
+        "en": "{board} · {count} player(s) · {min_games}+ games",
     },
     "ui.rank.footer": {
         "zh": "<span style='color:#888;'>"

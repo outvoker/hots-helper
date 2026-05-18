@@ -1,20 +1,22 @@
-"""Cross-game player rankings — "kingmakers" (worst teammates ever) and
-"boogeymen" (strongest opponents ever).
+"""Cross-game player rankings — four boards keyed on "playing with us"
+vs "playing against us", each ordered by Wilson lower bound on win-rate.
 
-Drives two things:
-* the standalone ranking dialog (a "Hall of Shame / Hall of Fame")
-* a fast handle-set lookup the BP popup uses to highlight player cards
-  whose handle shows up near the top of either board
+Boards:
 
-Ranking philosophy:
-* Score by Wilson 95% lower bound on win-rate (over min-games threshold)
-  rather than raw win-rate, so a 3-game player on a hot streak doesn't
-  outrank a real signal.
-* The "worst teammate" board orders ascending by Wilson; the "strongest
-  opponent" board orders descending. Both boards exclude the squad's
-  own handles (heuristically detected by play frequency).
-* Tiebreak on KDA / hero damage so two equally-bad players sort by how
-  much they actually hurt your team.
+* ``worst_teammate``   — lowest WR when on our team
+* ``best_teammate``    — highest WR when on our team
+* ``best_opponent``    — highest WR when on the enemy team (i.e. they
+                         beat us a lot — boogeymen)
+* ``worst_opponent``   — lowest WR when on the enemy team (free wins)
+
+Squad-side detection is a heuristic (anyone with ≥20 games of replay
+history is treated as one of us, since random matchmaking opponents
+almost never reappear that often). The boards exclude the squad
+itself.
+
+The four boards use raw WR sorting only as a tiebreaker; the primary
+key is Wilson 95% lower bound so a 1-game 100% streak can't lead any
+chart.
 """
 
 from __future__ import annotations
@@ -25,10 +27,26 @@ from .db import Store
 from .stats import wilson_lower_bound
 
 
+# Board identifiers used by the dialog dropdown and the BP popup
+# highlighter. Kept in one place so adding a fifth board (say,
+# "highest avg damage") is one edit.
+BOARD_WORST_TEAMMATE = "worst_teammate"
+BOARD_BEST_TEAMMATE = "best_teammate"
+BOARD_BEST_OPPONENT = "best_opponent"
+BOARD_WORST_OPPONENT = "worst_opponent"
+
+ALL_BOARDS = (
+    BOARD_WORST_TEAMMATE,
+    BOARD_BEST_TEAMMATE,
+    BOARD_BEST_OPPONENT,
+    BOARD_WORST_OPPONENT,
+)
+
+
 @dataclass(frozen=True)
 class PlayerRankRow:
-    """One row of either ranking board."""
-    rank: int                # 1-indexed
+    """One row of any of the four boards."""
+    rank: int                # 1-indexed within the board
     toon_handle: str
     display_name: str
     games: int
@@ -69,79 +87,86 @@ def _row_to_rank(row, *, rank: int) -> PlayerRankRow:
     )
 
 
-def compute_rankings(
+def _sort_and_rerank(
+    scored: list[PlayerRankRow],
+    *,
+    direction: str,
+    limit: int,
+) -> list[PlayerRankRow]:
+    """Sort ``scored`` by Wilson LB in the requested direction, slice
+    to ``limit``, and rebuild rank numbers."""
+    if direction == "asc":
+        scored = sorted(
+            scored,
+            key=lambda p: (p.wilson_lb, p.win_rate, -p.games, p.kda),
+        )
+    else:
+        scored = sorted(
+            scored,
+            key=lambda p: (-p.wilson_lb, -p.win_rate, -p.games, -p.kda),
+        )
+    return [
+        PlayerRankRow(**{**p.__dict__, "rank": i + 1})
+        for i, p in enumerate(scored[:limit])
+    ]
+
+
+def compute_board(
     store: Store,
+    board: str,
     *,
     min_games: int = 5,
-    limit: int = 100,
-    include_squad: bool = False,
-) -> tuple[list[PlayerRankRow], list[PlayerRankRow]]:
-    """Return ``(worst_teammates, best_opponents)`` lists.
+    limit: int = 10,
+) -> list[PlayerRankRow]:
+    """Compute one of :data:`ALL_BOARDS`.
 
-    Both lists are derived from the *same* per-player aggregate; we just
-    sort one ascending and one descending. ``min_games`` and ``limit``
-    apply to each list independently. ``include_squad=True`` keeps our
-    own handles in the listing — the dialog exposes a checkbox for this
-    so a user can sanity-check that the squad isn't accidentally on the
-    boogeyman board.
+    Both teammate boards share an underlying SQL query (filtered by
+    ``team = our_team``) and just sort opposite directions; the
+    opponent boards do the same with ``team != our_team``. We keep
+    them as separate calls so the caller can render only what the
+    dropdown currently asks for, with no wasted aggregation.
     """
-    exclude: tuple[str, ...] = ()
-    if not include_squad:
-        exclude = tuple(store.squad_handles())
+    if board not in ALL_BOARDS:
+        raise ValueError(f"unknown board: {board!r}")
 
-    rows = store.player_rankings(
+    squad = tuple(store.squad_handles())
+    if not squad:
+        return []
+
+    side = "teammate" if "teammate" in board else "opponent"
+    direction = "asc" if board.startswith("worst_") else "desc"
+
+    rows = store.player_rankings_vs_squad(
+        squad,
+        side=side,
         min_games=min_games,
-        # Pull plenty so we can sort and slice afterward; SQL ORDER BY
-        # is by games desc which doesn't match either board's order.
-        limit=max(limit * 4, 200),
-        exclude_handles=exclude,
+        # Pull a generous slice so the post-sort still has enough
+        # signal even when the SQL ORDER BY (games desc) doesn't
+        # match either direction we care about.
+        limit=max(limit * 6, 200),
     )
     if not rows:
-        return [], []
-
-    # Score everyone once.
-    scored = [(_row_to_rank(r, rank=0)) for r in rows]
-
-    # Worst teammates: lowest Wilson LB first. Tiebreak by raw win-rate
-    # asc, then by games desc (more games = more confidence in the
-    # bad-ness), then by KDA asc (worse KDA tied = worse).
-    worst = sorted(
-        scored,
-        key=lambda p: (p.wilson_lb, p.win_rate, -p.games, p.kda),
-    )[:limit]
-    worst = [
-        PlayerRankRow(**{**p.__dict__, "rank": i + 1})
-        for i, p in enumerate(worst)
-    ]
-
-    # Best opponents: highest Wilson LB first. Tiebreak by raw win-rate
-    # desc, then games desc, then KDA desc.
-    best = sorted(
-        scored,
-        key=lambda p: (-p.wilson_lb, -p.win_rate, -p.games, -p.kda),
-    )[:limit]
-    best = [
-        PlayerRankRow(**{**p.__dict__, "rank": i + 1})
-        for i, p in enumerate(best)
-    ]
-
-    return worst, best
+        return []
+    scored = [_row_to_rank(r, rank=0) for r in rows]
+    return _sort_and_rerank(scored, direction=direction, limit=limit)
 
 
-def highlight_handles(
+def highlight_indices(
     store: Store,
     *,
-    top_n: int = 20,
+    top_n: int = 30,
     min_games: int = 5,
-) -> tuple[set[str], set[str]]:
-    """Handle sets used by the BP popup to flag cards.
+) -> dict[str, dict[str, PlayerRankRow]]:
+    """Per-board ``{toon_handle: PlayerRankRow}`` dicts for fast lookup.
 
-    Returns ``(worst_handles, best_handles)``. Both sets are subsets of
-    the boards from :func:`compute_rankings` — small, so a card refresh
-    can do an O(1) membership test per slot.
+    The BP popup uses two of these (worst teammate / best opponent) to
+    flag player cards. Returning all four keeps the API symmetric
+    even though the popup highlight is currently only on the two
+    "danger" boards.
     """
-    worst, best = compute_rankings(store, min_games=min_games, limit=top_n)
-    return (
-        {p.toon_handle for p in worst if p.toon_handle},
-        {p.toon_handle for p in best if p.toon_handle},
-    )
+    return {
+        board: {p.toon_handle: p for p in compute_board(
+            store, board, min_games=min_games, limit=top_n,
+        ) if p.toon_handle}
+        for board in ALL_BOARDS
+    }
