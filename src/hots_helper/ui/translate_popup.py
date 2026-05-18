@@ -518,6 +518,13 @@ class ComposeTranslatePopup(QWidget):
             if code == "zh":
                 continue  # don't translate zh→zh
             self.target_combo.addItem(label, code)
+        # Default to Korean — the squad mostly plays on KR servers, so
+        # "I want to type something at a Korean teammate" is by far the
+        # most common compose-translate use case.
+        for i in range(self.target_combo.count()):
+            if self.target_combo.itemData(i) == "ko":
+                self.target_combo.setCurrentIndex(i)
+                break
         target_row.addWidget(self.target_combo, 1)
         self.send_btn = QPushButton()
         self.send_btn.clicked.connect(self._send)

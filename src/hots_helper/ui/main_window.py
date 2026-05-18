@@ -389,7 +389,14 @@ class MainWindow(QMainWindow):
         )
 
         self.popup = PopupWindow(self.store)
-        self.capture_progress = CaptureProgressDialog(self)
+        # Pass parent=None on purpose. With ``parent=self`` the
+        # Qt.Tool window inherits the main window's "owner" and
+        # Windows pulls the owner to the foreground when the tool
+        # shows — which yanks the helper UI back over the game even
+        # though we already have WA_ShowWithoutActivating set on the
+        # progress dialog. Detached parent-less = no owner-window
+        # foreground promotion.
+        self.capture_progress = CaptureProgressDialog(None)
         # Lazy-create translation popups on first hotkey press.
         self._chat_trans_popup: ChatTranslationPopup | None = None
         self._compose_popup: ComposeTranslatePopup | None = None
@@ -1018,9 +1025,14 @@ class MainWindow(QMainWindow):
 
     def _on_screenshot_taken_bp(self) -> None:
         """Worker tells us the BP frame is on disk → show the progress
-        dialog and restore overlays. The flow="bp" script kicks in."""
+        dialog and restore overlays. The flow="bp" script kicks in.
+
+        Anchor is ``None`` (= screen center) on purpose. Anchoring to
+        ``self`` would pull the main window into screen coordinates we
+        don't want during a draft — the user wants to see the progress
+        card over the game, not behind the helper UI."""
         self._restore_helper_overlays_after_capture()
-        self.capture_progress.start(anchor=self, flow="bp")
+        self.capture_progress.start(anchor=None, flow="bp")
 
     def _cleanup_hotkey_thread(self) -> None:
         if self._hotkey_worker is not None:
@@ -1106,9 +1118,12 @@ class MainWindow(QMainWindow):
 
     def _on_screenshot_taken_chat(self) -> None:
         """Worker tells us the chat-OCR frame is on disk → show the
-        progress dialog (chat-flavored copy) and restore the launcher."""
+        progress dialog (chat-flavored copy) and restore the launcher.
+
+        Same anchor=None reasoning as :meth:`_on_screenshot_taken_bp`
+        — never use the main window as anchor, it pulls focus."""
         self._restore_helper_overlays_after_capture()
-        self.capture_progress.start(anchor=self, flow="chat")
+        self.capture_progress.start(anchor=None, flow="chat")
 
     def _cleanup_chat_translate_thread(self) -> None:
         if self._chat_trans_worker is not None:
