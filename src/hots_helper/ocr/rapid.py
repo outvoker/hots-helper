@@ -170,6 +170,13 @@ def _merge_blocks(passes: list[list[OcrBlock]],
     # rec'd by at least the CN+EN pass, so genuine text has
     # overlap_count >= 2 (often 3). Solitary blocks under the floor
     # are the JP/KR mobile models seeing patterns in noise.
+    #
+    # The "solitary == hallucination" heuristic only makes sense when
+    # we ran more than one pass. With a single pass every block is
+    # solitary by definition; filtering would silently drop real
+    # text. So skip the filter entirely in that case.
+    if len(passes) <= 1:
+        return list(merged)
     final: list[OcrBlock] = []
     for block, n in zip(merged, overlap_count):
         if n == 1 and block.confidence < unique_confidence_floor:
@@ -218,9 +225,30 @@ def _run_pass(
 
 
 def recognize(image_path: Path,
-              progress: ProgressCallback = None) -> list[OcrBlock]:
+              progress: ProgressCallback = None,
+              languages: list[str] | None = None) -> list[OcrBlock]:
+    """Run RapidOCR over ``image_path``.
+
+    ``languages`` selects which engines run; values must match the
+    ``tag`` field of one of :data:`_LANGS`. ``None`` means "use every
+    bundled engine" — useful for one-off scripts. The UI passes its
+    user-configured subset (cheaper to run fewer passes; each one is
+    ~1s of wall time).
+    """
     t0 = time.monotonic()
     _emit(progress, "loading RapidOCR engines…")
+
+    # Resolve which engine specs to actually run this call.
+    if languages is None:
+        active_langs = _LANGS
+    else:
+        wanted = set(languages)
+        active_langs = tuple(s for s in _LANGS if s.tag in wanted)
+        if not active_langs:
+            # Empty / all-unknown selection — fall back to CN+EN so we
+            # don't silently return zero blocks. CN+EN is the cheapest
+            # pass and covers the squad's most common case.
+            active_langs = tuple(s for s in _LANGS if s.tag == "cn+en")
 
     # Resolve image dimensions once so every pass produces normalised bboxes.
     img_w: float
@@ -242,7 +270,7 @@ def recognize(image_path: Path,
     # to ~40s "parallel". Until we share the det stage or pin
     # per-session thread counts, serial is faster.
     passes: list[list[OcrBlock]] = []
-    for spec in _LANGS:
+    for spec in active_langs:
         try:
             engine = _get_engine(spec)
         except FileNotFoundError as e:

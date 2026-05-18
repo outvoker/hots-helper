@@ -326,6 +326,30 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "显示置顶悬浮按钮（点击展开 BP / 翻译 / 转译）",
         "en": "Show always-on-top floating chip (click to reveal BP / translate / compose)",
     },
+    "ui.main.ocr_lang_section": {
+        "zh": "OCR 语言模型",
+        "en": "OCR language packs",
+    },
+    "ui.main.ocr_lang_cn": {
+        "zh": "中文 + 英文（必选）",
+        "en": "Chinese + English (required)",
+    },
+    "ui.main.ocr_lang_kr": {
+        "zh": "韩文",
+        "en": "Korean",
+    },
+    "ui.main.ocr_lang_jp": {
+        "zh": "日文",
+        "en": "Japanese",
+    },
+    "ui.main.ocr_lang_hint": {
+        "zh": "每多勾一种语言，OCR 大约多花 1 秒；中英文模型已包含英文识别。",
+        "en": "Each extra language adds ~1s of OCR time. The Chinese model already covers English.",
+    },
+    "ui.main.ocr_lang_saved": {
+        "zh": "OCR 语言模型已保存：{langs}",
+        "en": "OCR languages saved: {langs}",
+    },
 
     # === Floating launcher ===============================================
     "ui.launcher.tooltip": {

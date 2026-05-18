@@ -98,6 +98,31 @@ def discover_replay_dirs(root: Path) -> list[Path]:
     return out
 
 
+# Tags accepted in ``Config.ocr_languages``. Mirrors the keys defined in
+# ``hots_helper.ocr.rapid._LANGS``.
+_OCR_LANGUAGE_TAGS = ("cn+en", "korean", "japanese")
+
+
+def _load_ocr_languages(raw) -> list[str]:
+    """Sanitise the on-disk ``ocr_languages`` value.
+
+    Old configs won't have the field; brand-new installs default to
+    Chinese + Korean. We also drop unknown tags so a stale config
+    can't sneak invalid values into the OCR pipeline.
+    """
+    if raw is None:
+        return ["cn+en", "korean"]
+    if not isinstance(raw, list):
+        return ["cn+en", "korean"]
+    out = [str(t) for t in raw if isinstance(t, str) and t in _OCR_LANGUAGE_TAGS]
+    # Always keep cn+en — it's the only model that covers English at
+    # all, and turning it off would silently break English chat /
+    # English handles. Re-add quietly if the user dropped it.
+    if "cn+en" not in out:
+        out.insert(0, "cn+en")
+    return out
+
+
 @dataclass
 class Config:
     recording_roots: list[str] = field(default_factory=list)
@@ -121,6 +146,17 @@ class Config:
     auto_watch: bool = True
     # UI locale, "zh" or "en".
     language: str = "zh"
+    # OCR language packs to run. Each tag corresponds to one engine in
+    # ``hots_helper.ocr.rapid._LANGS``:
+    #   * ``cn+en``    — Chinese + Latin alphabet (covers English on its own).
+    #   * ``korean``   — Hangul + Latin.
+    #   * ``japanese`` — Hiragana / Katakana / Kanji + Latin.
+    # Each enabled language adds ~1s to OCR wall time, so the default is
+    # the cheapest combo that still covers the squad's KR servers
+    # (CN+EN gives us English handles for free).
+    ocr_languages: list[str] = field(
+        default_factory=lambda: ["cn+en", "korean"]
+    )
     # Cloud sync — empty string means "disabled". Both must be set.
     supabase_url: str = ""
     supabase_anon_key: str = ""
@@ -150,6 +186,7 @@ class Config:
             launcher_y=int(raw.get("launcher_y") or -1),
             auto_watch=bool(raw.get("auto_watch", True)),
             language=str(raw.get("language") or "zh"),
+            ocr_languages=_load_ocr_languages(raw.get("ocr_languages")),
             supabase_url=str(raw.get("supabase_url") or ""),
             supabase_anon_key=str(raw.get("supabase_anon_key") or ""),
             sync_auto=bool(raw.get("sync_auto", True)),

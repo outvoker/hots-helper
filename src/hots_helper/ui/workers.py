@@ -173,12 +173,19 @@ class HotkeyWorker(QObject):
     screenshot_taken = Signal()
     finished = Signal(object)  # HotkeyShotResult
 
-    def __init__(self, sample_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        sample_path: Path | None = None,
+        ocr_languages: list[str] | None = None,
+    ) -> None:
         super().__init__()
         # If set, skip the live screenshot stage and use this image
         # instead. Used by the BP card's "样例测试 / Sample" button so
         # the user can see the popup without being in a real game.
         self._sample_path: Path | None = sample_path
+        # Per-call OCR engine selection passed from the UI's config.
+        # ``None`` = use whatever rapid.recognize() defaults to.
+        self._ocr_languages: list[str] | None = ocr_languages
 
     def run(self) -> None:
         log_lines: list[str] = []
@@ -252,7 +259,11 @@ class HotkeyWorker(QObject):
                     self.progress.emit(f"      {msg}")
                     log_lines.append(f"      {msg}")
 
-                blocks = recognize(screenshot_path, progress=_ocr_progress)
+                blocks = recognize(
+                    screenshot_path,
+                    progress=_ocr_progress,
+                    languages=self._ocr_languages,
+                )
                 dt = time.monotonic() - t1
                 log_lines.append(
                     f"[2/3] OCR returned {len(blocks)} text block(s) in {dt:.1f}s"
@@ -364,9 +375,14 @@ class ChatTranslateWorker(QObject):
     screenshot_taken = Signal()
     finished = Signal(object)  # ChatTranslationResult
 
-    def __init__(self, target_lang: str = "zh") -> None:
+    def __init__(
+        self,
+        target_lang: str = "zh",
+        ocr_languages: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self._target_lang = target_lang
+        self._ocr_languages: list[str] | None = ocr_languages
 
     def run(self) -> None:
         from ..chat_ocr import extract_chat_lines
@@ -407,6 +423,7 @@ class ChatTranslateWorker(QObject):
             blocks = recognize(
                 screenshot_path,
                 progress=lambda m: self.progress.emit(f"      {m}"),
+                languages=self._ocr_languages,
             )
             log_lines.append(
                 f"[2/3] OCR returned {len(blocks)} blocks in "

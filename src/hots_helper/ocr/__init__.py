@@ -32,12 +32,18 @@ class OcrBlock:
 
 
 def recognize(image_path: Path,
-              progress: ProgressCallback = None) -> list[OcrBlock]:
-    """Run RapidOCR on ``image_path`` and return text blocks."""
+              progress: ProgressCallback = None,
+              languages: list[str] | None = None) -> list[OcrBlock]:
+    """Run RapidOCR on ``image_path`` and return text blocks.
+
+    ``languages`` is an optional list of engine tags (``"cn+en"``,
+    ``"korean"``, ``"japanese"``); ``None`` runs every bundled
+    engine. Callers in the UI thread it through from ``Config``.
+    """
     try:
         from .rapid import recognize as _r
     except ImportError as e:
         if progress is not None:
             progress(f"rapidocr-onnxruntime not installed: {e}")
         return []
-    return _r(image_path, progress=progress)
+    return _r(image_path, progress=progress, languages=languages)

@@ -294,6 +294,45 @@ class MainWindow(QMainWindow):
         tb.addLayout(compose_row)
         sp.addWidget(self.trans_box)
 
+        # --- OCR language packs section ----------------------------------
+        # Each enabled language adds ~1s to OCR wall time on a typical
+        # laptop. CN+EN is forced on (covers Chinese + English on its
+        # own); KR / JP are optional. The squad's default is CN+EN
+        # plus Korean, since most opponents are on KR servers.
+        self.ocr_lang_box = QGroupBox()
+        olb = QVBoxLayout(self.ocr_lang_box)
+        olb_row = QHBoxLayout()
+        self.ocr_lang_cn_chk = QCheckBox()
+        self.ocr_lang_cn_chk.setChecked(True)
+        self.ocr_lang_cn_chk.setEnabled(False)  # always on
+        self.ocr_lang_cn_chk.setToolTip(
+            "中文 + 英文（始终启用，英文只靠这个模型识别）"
+        )
+        olb_row.addWidget(self.ocr_lang_cn_chk)
+        self.ocr_lang_kr_chk = QCheckBox()
+        self.ocr_lang_kr_chk.setChecked(
+            "korean" in self.config.ocr_languages
+        )
+        self.ocr_lang_kr_chk.stateChanged.connect(
+            lambda _s: self._save_ocr_languages()
+        )
+        olb_row.addWidget(self.ocr_lang_kr_chk)
+        self.ocr_lang_jp_chk = QCheckBox()
+        self.ocr_lang_jp_chk.setChecked(
+            "japanese" in self.config.ocr_languages
+        )
+        self.ocr_lang_jp_chk.stateChanged.connect(
+            lambda _s: self._save_ocr_languages()
+        )
+        olb_row.addWidget(self.ocr_lang_jp_chk)
+        olb_row.addStretch(1)
+        olb.addLayout(olb_row)
+        self.ocr_lang_hint = QLabel()
+        self.ocr_lang_hint.setStyleSheet(f"color:{TEXT_DIM}; font-size:9pt;")
+        self.ocr_lang_hint.setWordWrap(True)
+        olb.addWidget(self.ocr_lang_hint)
+        sp.addWidget(self.ocr_lang_box)
+
         # Floating launcher toggle — single checkbox, persisted to config.
         # Wraps it in a QGroupBox so it visually groups with the other
         # settings sections.
@@ -681,6 +720,12 @@ class MainWindow(QMainWindow):
         self.launcher_box.setTitle(t("ui.main.launcher_section"))
         self.launcher_chk.setText(t("ui.main.launcher_visible"))
 
+        self.ocr_lang_box.setTitle(t("ui.main.ocr_lang_section"))
+        self.ocr_lang_cn_chk.setText(t("ui.main.ocr_lang_cn"))
+        self.ocr_lang_kr_chk.setText(t("ui.main.ocr_lang_kr"))
+        self.ocr_lang_jp_chk.setText(t("ui.main.ocr_lang_jp"))
+        self.ocr_lang_hint.setText(t("ui.main.ocr_lang_hint"))
+
         # Refresh derived labels that include translated text.
         self._refresh_roots()
         self._refresh_stats()
@@ -883,6 +928,18 @@ class MainWindow(QMainWindow):
         else:
             self.launcher.hide()
 
+    def _save_ocr_languages(self) -> None:
+        """Persist the user's checkbox choices. CN+EN is always on
+        (it's the only model that recognises English at all)."""
+        langs = ["cn+en"]
+        if self.ocr_lang_kr_chk.isChecked():
+            langs.append("korean")
+        if self.ocr_lang_jp_chk.isChecked():
+            langs.append("japanese")
+        self.config.ocr_languages = langs
+        self.config.save()
+        self._log(t("ui.main.ocr_lang_saved", langs=", ".join(langs)))
+
     def _start_sync(self, *, force: bool) -> None:
         if self._cloud_sync is None:
             self.sync_status_label.setText(t("ui.main.sync_disabled"))
@@ -969,7 +1026,10 @@ class MainWindow(QMainWindow):
         self._hide_helper_overlays_for_capture()
 
         thread = QThread(self)
-        worker = HotkeyWorker(sample_path=sample_path)
+        worker = HotkeyWorker(
+            sample_path=sample_path,
+            ocr_languages=list(self.config.ocr_languages),
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._log)
@@ -1103,7 +1163,10 @@ class MainWindow(QMainWindow):
         self._hide_helper_overlays_for_capture()
 
         thread = QThread(self)
-        worker = ChatTranslateWorker(target_lang="zh")
+        worker = ChatTranslateWorker(
+            target_lang="zh",
+            ocr_languages=list(self.config.ocr_languages),
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._log)
