@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import threading
 import urllib.error
 import urllib.parse
@@ -507,8 +508,17 @@ class CloudSync:
         if progress:
             progress(f"applying {len(rows)} player_match rows from cloud…")
         # Map each cloud row's match_key to the local replay_id; rows whose
-        # replay we never pulled are dropped (will retry next sync).
+        # replay we never pulled are dropped (will retry next sync). The
+        # ``toon_handle`` FK to ``players`` is enforced too, but we don't
+        # rely on the prior _pull_players step having seen that handle —
+        # an old player can show up in a fresh match-from-someone-else's-
+        # PC without their players-row exceeding the watermark, which
+        # would crash with FOREIGN KEY constraint failed. Defensively
+        # upsert a stub player from each player_match row before
+        # inserting the match itself.
         applied = 0
+        skipped_no_replay = 0
+        fk_errors = 0
         with self.store._lock:
             for r in rows:
                 rid = self.store.conn.execute(
@@ -516,6 +526,7 @@ class CloudSync:
                     (r["match_key"],),
                 ).fetchone()
                 if rid is None:
+                    skipped_no_replay += 1
                     continue
                 replay_id = int(rid["id"])
                 # Skip if we already have this slot.
@@ -525,6 +536,22 @@ class CloudSync:
                 ).fetchone()
                 if exists is not None:
                     continue
+                # Ensure the FK target exists. INSERT OR IGNORE so we
+                # don't clobber a more-recent display_name we already
+                # have locally; the proper update flow lives in
+                # _pull_players above, this is just a safety net.
+                toon = _strip_nulls(r.get("toon_handle") or "")
+                if toon:
+                    self.store.conn.execute(
+                        """INSERT OR IGNORE INTO players
+                               (toon_handle, display_name, last_seen_at)
+                           VALUES (?, ?, ?)""",
+                        (
+                            toon,
+                            _strip_nulls(r.get("display_name") or toon),
+                            r.get("inserted_at") or "1970-01-01T00:00:00+00:00",
+                        ),
+                    )
                 # Build the row for the *local* schema: drop match_key
                 # (the local table has no such column — the cloud uses it
                 # as primary key, but locally we relate via replay_id).
@@ -537,11 +564,26 @@ class CloudSync:
                     for c in local_cols
                 ]
                 placeholders = ",".join("?" for _ in cols)
-                self.store.conn.execute(
-                    f"INSERT OR IGNORE INTO player_match ({','.join(cols)}) "
-                    f"VALUES ({placeholders})",
-                    tuple(values),
-                )
+                try:
+                    self.store.conn.execute(
+                        f"INSERT OR IGNORE INTO player_match ({','.join(cols)}) "
+                        f"VALUES ({placeholders})",
+                        tuple(values),
+                    )
+                except sqlite3.IntegrityError as e:
+                    # Don't let a single bad row abort the entire pull.
+                    # Most likely cause is a stale watermark pointing
+                    # past a row whose FK targets we haven't replicated
+                    # yet; the next sync will pick it up once the
+                    # missing parents arrive.
+                    fk_errors += 1
+                    if fk_errors <= 5:
+                        errors.append(
+                            f"player_match FK skip "
+                            f"(match_key={r.get('match_key')!r}, "
+                            f"toon={toon!r}): {e}"
+                        )
+                    continue
                 applied += 1
             self.store.conn.commit()
         latest = max(r.get("inserted_at") or "" for r in rows)
