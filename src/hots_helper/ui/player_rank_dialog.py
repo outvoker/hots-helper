@@ -178,10 +178,42 @@ class PlayerRankDialog(QDialog):
         self.table.setColumnWidth(COL_NAME, 220)
         # Default sort: combat power, descending.
         self.table.sortByColumn(COL_POWER, Qt.DescendingOrder)
-        # Show row numbers on the left so the user can read off rank
-        # within the current sort without burning a column on it.
         self.table.verticalHeader().setVisible(True)
         root.addWidget(self.table, 1)
+
+        # Squad "extras" — anyone in the 5-stack who fell outside the
+        # top-N slice gets pinned at the bottom in a small companion
+        # table. Kept separate from the main table so the user can
+        # click columns there to sort without re-shuffling the squad
+        # rows up into the slice. Hidden when the slice already
+        # contains everyone from the squad.
+        self.extras_label = QLabel()
+        self.extras_label.setStyleSheet(
+            f"color: #f4c453; padding: 8px 0 2px 0;"
+            f" font-weight: 600;"
+        )
+        root.addWidget(self.extras_label)
+
+        self.extras_table = QTableWidget()
+        self.extras_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.extras_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.extras_table.setAlternatingRowColors(True)
+        self.extras_table.setSortingEnabled(False)
+        self.extras_table.setColumnCount(len(self._col_keys))
+        for i in range(len(self._col_keys)):
+            self.extras_table.horizontalHeader().setSectionResizeMode(
+                i, QHeaderView.ResizeToContents
+            )
+        self.extras_table.horizontalHeader().setSectionResizeMode(
+            COL_NAME, QHeaderView.Stretch
+        )
+        self.extras_table.setColumnWidth(COL_NAME, 220)
+        self.extras_table.horizontalHeader().setVisible(False)
+        self.extras_table.verticalHeader().setVisible(False)
+        # Compact: no scrollbar — fixed height to fit up to ~6 rows so
+        # it doesn't visually compete with the main leaderboard.
+        self.extras_table.setMaximumHeight(180)
+        root.addWidget(self.extras_table)
 
         self.footer_label = QLabel()
         self.footer_label.setTextFormat(Qt.RichText)
@@ -288,36 +320,47 @@ class PlayerRankDialog(QDialog):
         rows: list[PlayerRankRow],
         extras: list[PlayerRankRow],
     ) -> None:
-        """Render the top-N slice followed by ``extras`` (squad members
-        who fell outside the slice). Both sections share the same
-        column layout. Sorting is *disabled* while extras are visible
-        — otherwise the user could click a column header and
-        re-shuffle the squad rows up into the main slice, defeating
-        the whole "extras at the bottom" idea.
+        """Populate both tables: the main ``self.table`` with the
+        top-N slice (click-to-sort enabled), and ``self.extras_table``
+        below it with the squad members that didn't make the cut.
 
-        With no extras (no hero filter pushing squad off the slice),
-        sorting stays enabled like before.
+        Splitting the two tables means the user can click any column
+        on the main table to re-sort without dragging the squad
+        section into the population — the extras list keeps its
+        "here are your buddies' real ranks" framing intact.
         """
+        # Main slice: disable sorting while populating, then re-enable
+        # so the column headers stay live.
         tbl = self.table
-        # Disable sorting while populating; a bunch of setItem() calls
-        # under live sorting would shuffle the table on every insert.
         tbl.setSortingEnabled(False)
-        tbl.setRowCount(len(rows) + len(extras))
-
+        tbl.setRowCount(len(rows))
         for i, p in enumerate(rows):
-            self._fill_row(i, p, is_extra=False)
+            self._fill_row(tbl, i, p, is_extra=False)
+        tbl.setSortingEnabled(True)
 
+        # Extras: pinned, no sort. Hide the whole section if every
+        # squad member already showed up in the main slice (e.g.
+        # nothing pushed them off, or limit is huge).
+        ex = self.extras_table
+        ex.setRowCount(len(extras))
         for j, p in enumerate(extras):
-            self._fill_row(len(rows) + j, p, is_extra=True)
-
-        # Only re-enable column sorting when there are no extras —
-        # otherwise the extras would shuffle into the main population
-        # and lose their "we showed you these even though they're
-        # outside the limit" framing.
-        tbl.setSortingEnabled(not extras)
+            self._fill_row(ex, j, p, is_extra=True)
+        if extras:
+            self.extras_label.setText(
+                t("ui.rank.extras_label", count=len(extras))
+            )
+            self.extras_label.show()
+            ex.show()
+            # Cap the table to the rows we actually have, so a 1-extra
+            # case doesn't show 5 rows of empty space.
+            ex.setFixedHeight(min(180, 32 * len(extras) + 8))
+        else:
+            self.extras_label.hide()
+            ex.hide()
 
     def _fill_row(
         self,
+        tbl: QTableWidget,
         row_idx: int,
         p: PlayerRankRow,
         *,
@@ -358,4 +401,4 @@ class PlayerRankDialog(QDialog):
             item.setForeground(fg)
             if bg is not None:
                 item.setBackground(bg)
-            self.table.setItem(row_idx, col, item)
+            tbl.setItem(row_idx, col, item)
