@@ -68,7 +68,10 @@ class HeroRankingDialog(QDialog):
 
         header = QHBoxLayout()
         self.title = QLabel()
-        self.title.setFont(QFont("", 14, QFont.Bold))
+        f = QFont()
+        f.setPointSize(14)
+        f.setBold(True)
+        self.title.setFont(f)
         self.title.setProperty("role", "title")  # picks up gold from theme QSS
         header.addWidget(self.title)
         header.addStretch(1)

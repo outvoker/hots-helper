@@ -83,7 +83,10 @@ class PlayerRankDialog(QDialog):
 
         head = QHBoxLayout()
         self.title = QLabel()
-        self.title.setFont(QFont("", 14, QFont.Bold))
+        f = QFont()
+        f.setPointSize(14)
+        f.setBold(True)
+        self.title.setFont(f)
         self.title.setProperty("role", "title")
         head.addWidget(self.title)
         head.addStretch(1)
