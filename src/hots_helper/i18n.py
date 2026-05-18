@@ -451,12 +451,12 @@ _translations: dict[str, dict[str, str]] = {
 
     # Highlights on the BP popup player cards.
     "ui.popup.card.flag_worst": {
-        "zh": "🪦 最坑队友榜 #{rank}（{games} 局 · 胜率 {wr}%）",
-        "en": "🪦 Worst-teammate board #{rank} ({games}g · {wr}% WR)",
+        "zh": "🪦 低战斗力队友：战力 {power}（{games} 局 · 胜率 {wr}%）",
+        "en": "🪦 Low-power teammate: power {power} ({games}g · {wr}% WR)",
     },
     "ui.popup.card.flag_best": {
-        "zh": "👑 最强对手榜 #{rank}（{games} 局 · 胜率 {wr}%）",
-        "en": "👑 Strongest-opponent board #{rank} ({games}g · {wr}% WR)",
+        "zh": "👑 高战斗力对手：战力 {power}（{games} 局 · 胜率 {wr}%）",
+        "en": "👑 High-power opponent: power {power} ({games}g · {wr}% WR)",
     },
 
     # === Floating launcher ===============================================
@@ -639,6 +639,10 @@ _translations: dict[str, dict[str, str]] = {
     "ui.power_help.btn_tip": {
         "zh": "查看战斗力的算法、权重和阈值",
         "en": "View the combat power formula, weights, and thresholds",
+    },
+    "ui.power_help.btn_label": {
+        "zh": "❓ 战斗力是怎么算的",
+        "en": "❓ How is power computed",
     },
     "ui.aram.sort_games": {"zh": "局数", "en": "Games"},
     "ui.aram.sort_hero": {"zh": "英雄名", "en": "Hero name"},

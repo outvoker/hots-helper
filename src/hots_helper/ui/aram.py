@@ -123,7 +123,7 @@ class HeroRankingDialog(QDialog):
         header.addWidget(self.min_games_label)
         self.min_games_spin = QSpinBox()
         self.min_games_spin.setRange(1, 200)
-        self.min_games_spin.setValue(5)
+        self.min_games_spin.setValue(2)
         self.min_games_spin.valueChanged.connect(self._reload)
         header.addWidget(self.min_games_spin)
 
@@ -131,8 +131,7 @@ class HeroRankingDialog(QDialog):
         # QTableWidget.setSortingEnabled below. The ? button still
         # opens the combat-power help so users can see what each
         # column is.
-        self.power_help_btn = QPushButton("?")
-        self.power_help_btn.setFixedWidth(28)
+        self.power_help_btn = QPushButton()
         self.power_help_btn.setToolTip(t("ui.power_help.btn_tip"))
         self.power_help_btn.clicked.connect(self._show_power_help)
         header.addWidget(self.power_help_btn)
@@ -244,6 +243,7 @@ class HeroRankingDialog(QDialog):
         for i, (value, key) in enumerate(_MODES):
             self.mode_combo.setItemText(i, t(key))
         self.min_games_label.setText(t("ui.aram.min_games"))
+        self.power_help_btn.setText(t("ui.power_help.btn_label"))
         self.close_btn.setText(t("ui.aram.close"))
         self.search_label.setText(t("ui.aram.search_label"))
         self.search_edit.setPlaceholderText(t("ui.aram.search_placeholder"))

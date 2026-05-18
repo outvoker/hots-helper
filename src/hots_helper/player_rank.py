@@ -227,9 +227,92 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
 
 
 def build_power_baseline(store: Store) -> PowerBaseline:
-    """Pull the global per-match population once. ~1ms per 1k rows."""
+    """Pull the global per-match population once. ~1ms per 1k rows.
+
+    The per-metric percentile lists are built from individual matches
+    (so e.g. "this player averaged 50k hero damage" gets compared
+    against the distribution of single-match hero-damage values).
+    The ``raw_power_pool`` used for the final percentile is rebuilt
+    from *aggregated* baselines — one entry per hero and one entry
+    per player — so an English-textbook 1-game outlier in the per-
+    match space doesn't keep every aggregated row out of the top
+    quintile. See :func:`_attach_aggregate_pool`.
+    """
     rows = store.per_match_metric_samples()
-    return _build_baseline_from_rows(rows)
+    base = _build_baseline_from_rows(rows)
+    return _attach_aggregate_pool(base, store)
+
+
+def _attach_aggregate_pool(
+    base: PowerBaseline, store: Store
+) -> PowerBaseline:
+    """Replace ``raw_power_pool`` with a pool of aggregated raw scores.
+
+    Per-match raw scores produce a heavy upper tail (a 0-death 30-kill
+    Greymane game scores ~98 raw, no aggregated row can reach that),
+    which compresses the rank space the dialogs actually display
+    onto. Building the pool from real aggregates — every hero in
+    ``hero_aggregate_stats`` plus every player in
+    ``player_rankings_seen`` — keeps the second-stage percentile
+    meaningful: top of the leaderboard reads as "≈ top 5 % of
+    similar-shape rows you'll ever see", not "≈ top 60 % because
+    every single-game outlier is somewhere ahead of you".
+    """
+    pool: list[float] = []
+
+    # Hero aggregates — every hero with ≥1 game.
+    for r in store.hero_aggregate_stats():
+        pool.append(_raw_power(
+            baseline=base,
+            win_rate=(int(r["wins"] or 0) / int(r["games"] or 1)),
+            avg_k=float(r["avg_k"] or 0),
+            avg_d=float(r["avg_d"] or 0),
+            avg_a=float(r["avg_a"] or 0),
+            avg_hero_dmg=float(r["avg_hero_dmg"] or 0),
+            avg_siege_dmg=float(r["avg_siege_dmg"] or 0),
+            avg_structure_dmg=float(r["avg_structure_dmg"] or 0),
+            avg_healing=float(r["avg_healing"] or 0),
+            avg_dmg_soaked=float(r["avg_dmg_soaked"] or 0),
+            avg_dmg_taken=float(r["avg_dmg_taken"] or 0),
+            avg_xp=float(r["avg_xp"] or 0),
+            avg_cc=float(r["avg_cc"] or 0),
+        ))
+
+    # Player aggregates — every handle that's ever queued with us.
+    squad = tuple(store.squad_handles())
+    if squad:
+        for r in store.player_rankings_seen(squad, min_games=1, limit=2000):
+            pool.append(_raw_power(
+                baseline=base,
+                win_rate=(int(r["wins"] or 0) / int(r["games"] or 1)),
+                avg_k=float(r["avg_k"] or 0),
+                avg_d=float(r["avg_d"] or 0),
+                avg_a=float(r["avg_a"] or 0),
+                avg_hero_dmg=float(r["avg_hero_dmg"] or 0),
+                avg_siege_dmg=float(r["avg_siege_dmg"] or 0),
+                avg_structure_dmg=float(r["avg_structure_dmg"] or 0),
+                avg_healing=float(r["avg_healing"] or 0),
+                avg_dmg_soaked=float(r["avg_dmg_soaked"] or 0),
+                avg_dmg_taken=float(r["avg_dmg_taken"] or 0),
+                avg_xp=float(r["avg_xp"] or 0),
+                avg_cc=float(r["avg_cc"] or 0),
+            ))
+
+    pool.sort()
+    return PowerBaseline(
+        hero_damage=base.hero_damage,
+        siege_damage=base.siege_damage,
+        structure_damage=base.structure_damage,
+        healing=base.healing,
+        damage_soaked=base.damage_soaked,
+        damage_taken=base.damage_taken,
+        xp=base.xp,
+        cc=base.cc,
+        kda=base.kda,
+        deaths=base.deaths,
+        win_rates_per_match=base.win_rates_per_match,
+        raw_power_pool=pool,
+    )
 
 
 # Weights for the "combat power" score. Tuned by feel: KDA + win rate

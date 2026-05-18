@@ -322,14 +322,19 @@ class _PlayerCard(QFrame):
         self._summaries = summaries
         self._render()
 
-    def set_flag(self, kind: str, rank: int, games: int, win_rate: float) -> None:
-        """Visually flag this slot when its handle is on a leaderboard.
+    def set_flag(
+        self,
+        kind: str,
+        power: float,
+        games: int,
+        win_rate: float,
+    ) -> None:
+        """Flag this slot based on the player's combat-power percentile.
 
-        ``kind`` is ``"worst"`` for the worst-teammate board (only
-        relevant for ally slots) or ``"best"`` for the strongest-
-        opponent board (only relevant for enemy slots). The card grows
-        a coloured outline + a banner label above the body. Pass
-        ``kind=""`` to clear.
+        ``kind == "worst"`` → ally slot in the bottom 25% by power
+        (red banner, "low-power teammate"). ``kind == "best"`` →
+        enemy slot in the top 25% (gold banner, "high-power opponent").
+        ``kind == ""`` clears the flag.
         """
         if not kind:
             self.flag_label.hide()
@@ -338,17 +343,18 @@ class _PlayerCard(QFrame):
             return
 
         wr_pct = int(round(win_rate * 100))
+        power_str = f"{power:.0f}"
         if kind == "worst":
             text = t(
                 "ui.popup.card.flag_worst",
-                rank=rank, games=games, wr=wr_pct,
+                power=power_str, games=games, wr=wr_pct,
             )
             tone = "#e08585"   # warning red
             tone_bg = "#3a1a1a"
         else:
             text = t(
                 "ui.popup.card.flag_best",
-                rank=rank, games=games, wr=wr_pct,
+                power=power_str, games=games, wr=wr_pct,
             )
             tone = GOLD_BRIGHT
             tone_bg = "#3a2c10"
@@ -1083,14 +1089,16 @@ class PopupWindow(QWidget):
         *,
         side: str,
     ) -> None:
-        """Light up ``card`` based on the player's global power rank.
+        """Light up ``card`` based on the player's combat-power score.
 
         Ally cards (``side="ally"``) flag the bottom 25% of the
-        ranking (low-power teammates → red); enemy cards
-        (``side="enemy"``) flag the top 25% (high-power opponents →
-        gold). When the same display name resolves to multiple
-        handles, we pick the most extreme one in the relevant
-        direction.
+        ranking — these are the low-power players who'll likely
+        drag the team down. Enemy cards (``side="enemy"``) flag
+        the top 25% — strong opponents to watch out for. When the
+        same display name resolves to multiple handles we pick the
+        most extreme one in the relevant direction; the banner
+        shows the player's actual power score so the user sees
+        *why* the flag fired.
         """
         if not summaries or not getattr(self, "_ranked_total", 0):
             card.set_flag("", 0, 0, 0.0)
@@ -1122,7 +1130,7 @@ class PopupWindow(QWidget):
             kind = "best"
         card.set_flag(
             kind=kind,
-            rank=chosen.rank,
+            power=chosen.power,
             games=chosen.games,
             win_rate=chosen.win_rate,
         )

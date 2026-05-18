@@ -97,8 +97,8 @@ class PlayerRankDialog(QDialog):
         self.min_games_label = QLabel()
         head.addWidget(self.min_games_label)
         self.min_games_spin = QSpinBox()
-        self.min_games_spin.setRange(2, 100)
-        self.min_games_spin.setValue(5)
+        self.min_games_spin.setRange(1, 100)
+        self.min_games_spin.setValue(2)
         self.min_games_spin.valueChanged.connect(self._reload)
         head.addWidget(self.min_games_spin)
 
@@ -111,8 +111,7 @@ class PlayerRankDialog(QDialog):
         self.limit_spin.valueChanged.connect(self._reload)
         head.addWidget(self.limit_spin)
 
-        self.power_help_btn = QPushButton("?")
-        self.power_help_btn.setFixedWidth(28)
+        self.power_help_btn = QPushButton()
         self.power_help_btn.setToolTip(t("ui.power_help.btn_tip"))
         self.power_help_btn.clicked.connect(self._show_power_help)
         head.addWidget(self.power_help_btn)
@@ -171,6 +170,7 @@ class PlayerRankDialog(QDialog):
         self.title.setText(t("ui.rank.title"))
         self.min_games_label.setText(t("ui.aram.min_games"))
         self.limit_label.setText(t("ui.rank.limit_label"))
+        self.power_help_btn.setText(t("ui.power_help.btn_label"))
         self.close_btn.setText(t("ui.aram.close"))
         self.table.setHorizontalHeaderLabels([t(k) for k in self._col_keys])
         self.footer_label.setText(t("ui.rank.footer_single"))
@@ -203,6 +203,11 @@ class PlayerRankDialog(QDialog):
             min_games=min_games,
             limit=limit,
         )
+        # Squad set so we can tint our own rows in the table — makes
+        # it easy to see at a glance who in the 5-stack is over- or
+        # under-performing relative to the random handles we've
+        # queued with.
+        self._squad_set: set[str] = set(self.store.squad_handles())
         self.summary.setText(
             t("ui.rank.summary_total",
               count=len(rows), min_games=min_games)
@@ -230,11 +235,19 @@ class PlayerRankDialog(QDialog):
                 (COL_SOAK,   _fmt_k(p.avg_dmg_soaked),     p.avg_dmg_soaked),
                 (COL_XP,     _fmt_k(p.avg_xp),             p.avg_xp),
             ]
+            # Squad rows get tinted gold so the user can spot their
+            # own 5-stack inside the random-handle population.
+            is_squad = p.toon_handle in self._squad_set
+            fg = QColor(244, 196, 83) if is_squad else QColor(220, 220, 220)
+            bg = QColor(60, 48, 18) if is_squad else None
+
             for col, text, sort_value in specs:
                 item = _NumericItem(text, sort_value)
                 item.setTextAlignment(
                     Qt.AlignVCenter | (Qt.AlignLeft if col == COL_NAME else Qt.AlignRight)
                 )
-                item.setForeground(QColor(220, 220, 220))
+                item.setForeground(fg)
+                if bg is not None:
+                    item.setBackground(bg)
                 tbl.setItem(i, col, item)
         tbl.setSortingEnabled(True)
