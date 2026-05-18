@@ -54,6 +54,16 @@ WARN = "#e08585"
 GOOD = "#8fcc8f"
 
 
+# Resolve the dropdown-arrow SVGs to absolute paths so the QSS works
+# both in dev (running from the source tree) and in the PyInstaller
+# bundle (where _ASSETS_DIR points at the unpacked _internal dir).
+# Qt's QSS ``url()`` accepts forward slashes only, including on
+# Windows — so always normalise.
+from .assets import asset_path as _asset_path
+_ARROW = _asset_path("down-arrow.svg").as_posix()
+_ARROW_BRIGHT = _asset_path("down-arrow-bright.svg").as_posix()
+
+
 _QSS = f"""
 /* ---------- base ----------------------------------------------------- */
 * {{
@@ -226,18 +236,15 @@ QComboBox::drop-down:hover {{
     background: {BG_ELEVATED};
 }}
 QComboBox::down-arrow {{
-    /* CSS triangle: 4px transparent left+right + 5px coloured top
-     * makes a small downward-pointing chevron. The :on rule flips it
-     * subtly when the popup is open so the user gets feedback. */
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid {GOLD};
-    margin-right: 8px;
+    /* Tried CSS-triangle borders first — Qt rendered the borders as
+     * a flat horizontal bar instead of a chevron. SVG is rock-solid
+     * across macOS / Windows / X11. */
+    image: url({_ARROW});
+    width: 10px;
+    height: 6px;
 }}
 QComboBox::down-arrow:on {{
-    border-top: 5px solid {GOLD_BRIGHT};
+    image: url({_ARROW_BRIGHT});
 }}
 QComboBox QAbstractItemView {{
     background-color: {BG_INPUT};
