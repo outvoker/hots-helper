@@ -50,6 +50,11 @@ def _patch_pyobjc_axistrusted_lookup() -> None:
 
 _patch_pyobjc_axistrusted_lookup()
 
+
+# pynput is intentionally disabled on macOS — see HotkeyManager.set_hotkey.
+# Loading the module is still cheap enough to keep here in case we ever
+# want to flip the policy (e.g. to support advanced macOS users who
+# turned on Accessibility access for the helper).
 try:
     from pynput import keyboard
 except Exception:  # pragma: no cover - platform dependent
@@ -70,7 +75,26 @@ class HotkeyManager(QObject):
         return self._current
 
     def set_hotkey(self, combo: str) -> None:
-        """``combo`` in pynput form, e.g. ``<ctrl>+<shift>+h``."""
+        """``combo`` in pynput form, e.g. ``<ctrl>+<shift>+h``.
+
+        macOS: hotkeys are disabled. Background:
+        * The pynput keyboard listener processes every keystroke
+          system-wide; on PyObjC ≥ 11 it occasionally hits a
+          lazy-import KeyError when a CJK input method dispatches
+          its first character, crashing the listener thread (and on
+          some keystrokes the whole process).
+        * mac users can already trigger every hotkey-action through
+          the floating launcher chip, so a global hotkey here is
+          purely a convenience that doesn't justify keyboard-input
+          stability risk.
+        Windows is unaffected — pynput uses the Win32 RegisterHotKey
+        API there and never touches the IME pipeline.
+        """
+        if sys.platform == "darwin":
+            self.error.emit(
+                "macOS: 全局快捷键已禁用，请使用悬浮按钮触发各项功能。"
+            )
+            return
         if keyboard is None:
             self.error.emit("pynput not available; global hotkeys disabled")
             return
