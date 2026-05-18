@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -54,22 +55,22 @@ def _fmt_k(value: float) -> str:
     return f"{value:.0f}"
 
 
-# Column indices. Rank is shown via Qt's built-in vertical header
-# (left of the table) — clicking any column header re-sorts and the
-# row numbers on the side update automatically, which is the
-# behaviour the user actually wants.
-COL_NAME   = 0
-COL_POWER  = 1
-COL_GAMES  = 2
-COL_WINS   = 3
-COL_WR     = 4
-COL_WLB    = 5
-COL_KDA    = 6
-COL_HD     = 7
-COL_STRUCT = 8
-COL_HEAL   = 9
-COL_SOAK   = 10
-COL_XP     = 11
+# Column indices. We bring back an explicit rank column because the
+# table mixes the top-N slice with squad "extras" whose real rank
+# (e.g. 100) the user wants to see.
+COL_RANK   = 0
+COL_NAME   = 1
+COL_POWER  = 2
+COL_GAMES  = 3
+COL_WINS   = 4
+COL_WR     = 5
+COL_WLB    = 6
+COL_KDA    = 7
+COL_HD     = 8
+COL_STRUCT = 9
+COL_HEAL   = 10
+COL_SOAK   = 11
+COL_XP     = 12
 
 
 class PlayerRankDialog(QDialog):
@@ -93,6 +94,16 @@ class PlayerRankDialog(QDialog):
         self.title.setProperty("role", "title")
         head.addWidget(self.title)
         head.addStretch(1)
+
+        # Hero filter — leftmost so it reads "玩家排行 [英雄: 全部] …".
+        # Empty selection = all heroes (the default leaderboard).
+        self.hero_label = QLabel()
+        head.addWidget(self.hero_label)
+        self.hero_combo = QComboBox()
+        self.hero_combo.setMinimumWidth(160)
+        self.hero_combo.currentIndexChanged.connect(lambda _i: self._reload())
+        head.addWidget(self.hero_combo)
+        self._populate_hero_combo()
 
         self.min_games_label = QLabel()
         head.addWidget(self.min_games_label)
@@ -135,6 +146,7 @@ class PlayerRankDialog(QDialog):
         self.table.setSortingEnabled(True)
 
         self._col_keys = [
+            "ui.rank.col_rank",
             "ui.rank.col_name",
             "ui.rank.col_power",
             "ui.rank.col_games", "ui.rank.col_wins",
@@ -168,6 +180,11 @@ class PlayerRankDialog(QDialog):
     def _retranslate(self) -> None:
         self.setWindowTitle(t("ui.rank.window_title"))
         self.title.setText(t("ui.rank.title"))
+        self.hero_label.setText(t("ui.rank.hero_filter"))
+        # Refresh the "all heroes" sentinel label without losing the
+        # current selection.
+        if self.hero_combo.count() and self.hero_combo.itemData(0) is None:
+            self.hero_combo.setItemText(0, t("ui.rank.hero_all"))
         self.min_games_label.setText(t("ui.aram.min_games"))
         self.limit_label.setText(t("ui.rank.limit_label"))
         self.power_help_btn.setText(t("ui.power_help.btn_label"))
@@ -178,6 +195,25 @@ class PlayerRankDialog(QDialog):
     def _on_lang(self) -> None:
         self._retranslate()
         self._reload()
+
+    def _populate_hero_combo(self) -> None:
+        """Fill the hero dropdown with every hero in the DB.
+
+        ``itemData == None`` is the "all heroes" sentinel — kept as
+        the first entry so the dialog opens unfiltered. The list is
+        sorted by current locale's collation so 阿巴瑟 / 阿兹莫丹 sit
+        together and Latin names are alphabetical.
+        """
+        self.hero_combo.blockSignals(True)
+        self.hero_combo.clear()
+        self.hero_combo.addItem(t("ui.rank.hero_all"), None)
+        try:
+            rows = self.store.all_heroes()
+        except Exception:
+            rows = []
+        for r in sorted(rows, key=lambda x: x["hero"]):
+            self.hero_combo.addItem(r["hero"], r["hero"])
+        self.hero_combo.blockSignals(False)
 
     def _show_power_help(self) -> None:
         from .power_help import PowerHelpDialog
@@ -197,57 +233,104 @@ class PlayerRankDialog(QDialog):
     def _reload_inner(self) -> None:
         min_games = self.min_games_spin.value()
         limit = self.limit_spin.value()
+        hero = self.hero_combo.currentData()  # None = all heroes
 
-        rows = compute_player_rankings(
+        top, extras = compute_player_rankings(
             self.store,
             min_games=min_games,
             limit=limit,
+            hero=hero,
         )
         # Squad set so we can tint our own rows in the table — makes
         # it easy to see at a glance who in the 5-stack is over- or
         # under-performing relative to the random handles we've
         # queued with.
         self._squad_set: set[str] = set(self.store.squad_handles())
-        self.summary.setText(
-            t("ui.rank.summary_total",
-              count=len(rows), min_games=min_games)
-        )
-        self._fill_table(rows)
+        if hero:
+            self.summary.setText(
+                t("ui.rank.summary_hero",
+                  hero=hero, count=len(top), min_games=min_games)
+            )
+        else:
+            self.summary.setText(
+                t("ui.rank.summary_total",
+                  count=len(top), min_games=min_games)
+            )
+        self._fill_table(top, extras)
 
-    def _fill_table(self, rows: list[PlayerRankRow]) -> None:
+    def _fill_table(
+        self,
+        rows: list[PlayerRankRow],
+        extras: list[PlayerRankRow],
+    ) -> None:
+        """Render the top-N slice followed by ``extras`` (squad members
+        who fell outside the slice). Both sections share the same
+        column layout. Sorting is *disabled* while extras are visible
+        — otherwise the user could click a column header and
+        re-shuffle the squad rows up into the main slice, defeating
+        the whole "extras at the bottom" idea.
+
+        With no extras (no hero filter pushing squad off the slice),
+        sorting stays enabled like before.
+        """
         tbl = self.table
         # Disable sorting while populating; a bunch of setItem() calls
         # under live sorting would shuffle the table on every insert.
         tbl.setSortingEnabled(False)
-        tbl.setRowCount(len(rows))
-        for i, p in enumerate(rows):
-            specs = [
-                (COL_NAME,   p.display_name or "?",        None),
-                (COL_POWER,  f"{p.power:.0f}",             p.power),
-                (COL_GAMES,  str(p.games),                 p.games),
-                (COL_WINS,   str(p.wins),                  p.wins),
-                (COL_WR,     f"{p.win_rate*100:.0f}%",     p.win_rate),
-                (COL_WLB,    f"{p.wilson_lb*100:.0f}%",    p.wilson_lb),
-                (COL_KDA,    f"{p.avg_k:.1f}/{p.avg_d:.1f}/{p.avg_a:.1f}", p.kda),
-                (COL_HD,     _fmt_k(p.avg_hero_dmg),       p.avg_hero_dmg),
-                (COL_STRUCT, _fmt_k(p.avg_structure_dmg),  p.avg_structure_dmg),
-                (COL_HEAL,   _fmt_k(p.avg_healing),        p.avg_healing),
-                (COL_SOAK,   _fmt_k(p.avg_dmg_soaked),     p.avg_dmg_soaked),
-                (COL_XP,     _fmt_k(p.avg_xp),             p.avg_xp),
-            ]
-            # Squad rows get tinted gold so the user can spot their
-            # own 5-stack inside the random-handle population.
-            is_squad = p.toon_handle in self._squad_set
-            fg = QColor(244, 196, 83) if is_squad else QColor(220, 220, 220)
-            bg = QColor(60, 48, 18) if is_squad else None
+        tbl.setRowCount(len(rows) + len(extras))
 
-            for col, text, sort_value in specs:
-                item = _NumericItem(text, sort_value)
-                item.setTextAlignment(
-                    Qt.AlignVCenter | (Qt.AlignLeft if col == COL_NAME else Qt.AlignRight)
-                )
-                item.setForeground(fg)
-                if bg is not None:
-                    item.setBackground(bg)
-                tbl.setItem(i, col, item)
-        tbl.setSortingEnabled(True)
+        for i, p in enumerate(rows):
+            self._fill_row(i, p, is_extra=False)
+
+        for j, p in enumerate(extras):
+            self._fill_row(len(rows) + j, p, is_extra=True)
+
+        # Only re-enable column sorting when there are no extras —
+        # otherwise the extras would shuffle into the main population
+        # and lose their "we showed you these even though they're
+        # outside the limit" framing.
+        tbl.setSortingEnabled(not extras)
+
+    def _fill_row(
+        self,
+        row_idx: int,
+        p: PlayerRankRow,
+        *,
+        is_extra: bool,
+    ) -> None:
+        specs = [
+            (COL_RANK,   str(p.rank),                  p.rank),
+            (COL_NAME,   p.display_name or "?",        None),
+            (COL_POWER,  f"{p.power:.0f}",             p.power),
+            (COL_GAMES,  str(p.games),                 p.games),
+            (COL_WINS,   str(p.wins),                  p.wins),
+            (COL_WR,     f"{p.win_rate*100:.0f}%",     p.win_rate),
+            (COL_WLB,    f"{p.wilson_lb*100:.0f}%",    p.wilson_lb),
+            (COL_KDA,    f"{p.avg_k:.1f}/{p.avg_d:.1f}/{p.avg_a:.1f}", p.kda),
+            (COL_HD,     _fmt_k(p.avg_hero_dmg),       p.avg_hero_dmg),
+            (COL_STRUCT, _fmt_k(p.avg_structure_dmg),  p.avg_structure_dmg),
+            (COL_HEAL,   _fmt_k(p.avg_healing),        p.avg_healing),
+            (COL_SOAK,   _fmt_k(p.avg_dmg_soaked),     p.avg_dmg_soaked),
+            (COL_XP,     _fmt_k(p.avg_xp),             p.avg_xp),
+        ]
+        is_squad = p.toon_handle in self._squad_set
+        # Squad rows: gold text + dim-gold background so they pop in
+        # the main slice. Extras rows: same colours plus a slightly
+        # darker background so the visual break between the slice
+        # and the appended squad section reads at a glance.
+        if is_squad:
+            fg = QColor(244, 196, 83)
+            bg = QColor(40, 32, 12) if is_extra else QColor(60, 48, 18)
+        else:
+            fg = QColor(220, 220, 220)
+            bg = None
+
+        for col, text, sort_value in specs:
+            item = _NumericItem(text, sort_value)
+            item.setTextAlignment(
+                Qt.AlignVCenter | (Qt.AlignLeft if col == COL_NAME else Qt.AlignRight)
+            )
+            item.setForeground(fg)
+            if bg is not None:
+                item.setBackground(bg)
+            self.table.setItem(row_idx, col, item)

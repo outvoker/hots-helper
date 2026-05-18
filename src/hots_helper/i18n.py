@@ -400,6 +400,12 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "共 {count} 名玩家 · 最少 {min_games} 局起算 · 点击列名切换排序",
         "en": "{count} player(s) · {min_games}+ games · click any column header to sort",
     },
+    "ui.rank.summary_hero": {
+        "zh": "{hero} · {count} 名玩家 · 最少 {min_games} 局起算",
+        "en": "{hero} · {count} player(s) · {min_games}+ games",
+    },
+    "ui.rank.hero_filter": {"zh": "英雄", "en": "Hero"},
+    "ui.rank.hero_all": {"zh": "全部英雄", "en": "All heroes"},
     "ui.rank.footer": {
         "zh": "<span style='color:#888;'>"
               "排序按 Wilson 95% 置信下界（避免 1 局 100% 上榜）。"

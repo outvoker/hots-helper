@@ -485,22 +485,25 @@ def compute_player_rankings(
     *,
     min_games: int = 5,
     limit: int = 500,
+    hero: str | None = None,
     baseline: PowerBaseline | None = None,
-) -> list[PlayerRankRow]:
-    """Return players who have shared a match with the squad.
+) -> tuple[list[PlayerRankRow], list[PlayerRankRow]]:
+    """Return ``(top_rows, squad_extras)`` for the leaderboard.
 
     Pulls *all* matching rows from the DB, scores them in Python,
-    then sorts by power descending and slices to ``limit``. The SQL
-    side used to ``ORDER BY games DESC LIMIT n``, which guaranteed
-    the squad always made the cut (they have the most games by far)
-    even when the user wanted a small slice — so a "show me the top
-    20" ended up being "the 5 squad members + 15 randoms". By
-    filtering on power instead, the squad only appears in the slice
-    when they actually score among the top N.
+    then sorts by power descending. The first list is the genuine
+    top-N slice. The second list is squad members who didn't make
+    that slice but the user still wants to see — appended below the
+    table with their real (full-population) rank preserved, so a
+    user with limit=50 still sees Suanluobo at rank 100 if that's
+    where they actually placed.
+
+    ``hero`` restricts the aggregate to games where the player was
+    on that hero (used by the player dialog's hero dropdown).
     """
     squad = tuple(store.squad_handles())
     if not squad:
-        return []
+        return [], []
 
     rows = store.player_rankings_seen(
         squad,
@@ -509,17 +512,31 @@ def compute_player_rankings(
         # we still need every candidate available to Python so the
         # power-sort can pick the real top N.
         limit=10_000,
+        hero=hero,
     )
     if not rows:
-        return []
+        return [], []
     if baseline is None:
         baseline = build_power_baseline(store)
     scored = [_row_to_rank(r, rank=0) for r in rows]
     scored = _score_population(scored, baseline)
     scored.sort(key=lambda p: -p.power)
-    scored = scored[:limit]
-    # Renumber ranks now that we're in power order.
-    return [
+
+    # Assign final ranks against the *full* sorted list — these are
+    # what the user reads off the table even when a row is in the
+    # extras section.
+    ranked_full = [
         PlayerRankRow(**{**p.__dict__, "rank": i + 1})
         for i, p in enumerate(scored)
     ]
+
+    top = ranked_full[:limit]
+    top_handles = {p.toon_handle for p in top}
+    # Squad members not already in the top slice; preserve their
+    # real rank so the table reads "1, 2, …, 50, 87, 102" cleanly.
+    squad_set = set(squad)
+    extras = [
+        p for p in ranked_full
+        if p.toon_handle in squad_set and p.toon_handle not in top_handles
+    ]
+    return top, extras

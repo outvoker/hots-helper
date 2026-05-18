@@ -657,6 +657,7 @@ class Store:
         *,
         min_games: int = 5,
         limit: int = 500,
+        hero: str | None = None,
         mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
     ) -> list[sqlite3.Row]:
         """Per-player aggregate over every match the squad played in.
@@ -666,12 +667,22 @@ class Store:
         showed up in" and ``wins`` is "how many of those YOU won
         (your team won, regardless of whether that was our team)".
         Use this when the leaderboard doesn't care about side.
+
+        ``hero`` restricts the aggregate to games where the player
+        was on that specific hero. Useful for "show me the top
+        Greymane players we've met" — without it the average is
+        across whatever hero pool the player happened to flex.
         """
         if not squad_handles:
             return []
 
         clause, mode_params = _mode_clause(mode_filter)
         squad_placeholders = ",".join("?" for _ in squad_handles)
+        hero_clause = ""
+        hero_params: list[Any] = []
+        if hero:
+            hero_clause = " AND pm.hero = ?"
+            hero_params = [hero]
         return self.conn.execute(
             f"""
             SELECT pm.toon_handle,
@@ -699,6 +710,7 @@ class Store:
                 WHERE toon_handle IN ({squad_placeholders})
             )
             {clause}
+            {hero_clause}
             GROUP BY pm.toon_handle
             HAVING COUNT(*) >= ?
             ORDER BY games DESC
@@ -707,6 +719,7 @@ class Store:
             (
                 *squad_handles,
                 *mode_params,
+                *hero_params,
                 min_games,
                 limit,
             ),
