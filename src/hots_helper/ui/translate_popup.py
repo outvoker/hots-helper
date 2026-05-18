@@ -17,10 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QObject,
     Qt,
     QThread,
-    Signal,
 )
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
@@ -53,6 +51,7 @@ from .theme import (
     TEXT_DIM,
 )
 from .workers import (
+    ChatCropTranslateWorker,
     ChatTranslationResult,
     ComposeTranslateWorker,
     ComposeTranslationResult,
@@ -300,14 +299,14 @@ class ChatTranslationPopup(QWidget):
         if not self._screenshot_path:
             return
         # Re-OCR + re-translate on a worker thread so the network call
-        # doesn't block the popup. Use a small custom worker
-        # (RedrawTranslateWorker) defined in this module — full screen
-        # capture is unnecessary, we already have the image and the box.
+        # doesn't block the popup. Use the shared crop+translate worker
+        # — full screen capture is unnecessary, we already have the
+        # image and the box.
         self._redraw_busy = True
         self.redraw_btn.setEnabled(False)
         self.subtitle.setText(t("ui.chat_trans.redrawing"))
         thread = QThread(self)
-        worker = _RedrawTranslateWorker(
+        worker = ChatCropTranslateWorker(
             screenshot_path=self._screenshot_path,
             x=x, y=y, w=w, h=h,
         )
@@ -352,119 +351,6 @@ class ChatTranslationPopup(QWidget):
 
     def mouseReleaseEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
         self._drag_pos = None
-
-
-# === Redraw worker ==========================================================
-
-
-class _RedrawTranslateWorker(QObject):
-    """Re-OCR a user-cropped rectangle of an existing screenshot,
-    filter to chat-shaped text, translate to Chinese, return.
-
-    Smaller cousin of :class:`ChatTranslateWorker` — skips the screen-
-    capture stage and uses the manual crop as the input image. The
-    finished signal carries the same ``ChatTranslationResult`` shape
-    so the popup can reuse :meth:`show_result` unchanged.
-    """
-
-    progress = Signal(str)
-    finished = Signal(object)  # ChatTranslationResult
-
-    def __init__(
-        self,
-        screenshot_path: Path,
-        x: int, y: int, w: int, h: int,
-    ) -> None:
-        super().__init__()
-        self._path = screenshot_path
-        self._x = x
-        self._y = y
-        self._w = w
-        self._h = h
-
-    def run(self) -> None:
-        import tempfile
-        import traceback
-        from PIL import Image
-
-        from ..chat_ocr import filter_chat_blocks
-        from ..ocr import recognize
-        from ..translate import TranslateError, translate
-        from .workers import ChatTranslationResult
-
-        log_lines: list[str] = []
-        # 1. Crop
-        try:
-            with Image.open(self._path) as im:
-                crop = im.crop(
-                    (self._x, self._y, self._x + self._w, self._y + self._h)
-                )
-                pad = 8
-                padded = Image.new(
-                    "RGB",
-                    (crop.width + 2 * pad, crop.height + 2 * pad),
-                    (0, 0, 0),
-                )
-                padded.paste(crop, (pad, pad))
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                    tmp_path = Path(f.name)
-                padded.save(tmp_path)
-        except Exception as e:
-            log_lines.append(f"[crop error] {type(e).__name__}: {e}")
-            log_lines.append(traceback.format_exc())
-            self.finished.emit(ChatTranslationResult(
-                screenshot_path=self._path,
-                error=f"裁剪失败：{e}",
-                log_lines=log_lines,
-            ))
-            return
-
-        # 2. OCR the crop.
-        try:
-            blocks = recognize(tmp_path)
-        except Exception as e:
-            log_lines.append(f"[OCR error] {type(e).__name__}: {e}")
-            self.finished.emit(ChatTranslationResult(
-                screenshot_path=self._path,
-                error=f"OCR 失败：{e}",
-                log_lines=log_lines,
-            ))
-            return
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-        chat = filter_chat_blocks(blocks)
-        if not chat:
-            self.finished.emit(ChatTranslationResult(
-                screenshot_path=self._path,
-                pairs=[],
-                log_lines=log_lines + ["[redraw] no chat-shaped text in crop"],
-            ))
-            return
-
-        # 3. Translate.
-        try:
-            results = translate(
-                [c.text for c in chat],
-                target="zh",
-                source="auto",
-            )
-        except TranslateError as e:
-            self.finished.emit(ChatTranslationResult(
-                screenshot_path=self._path,
-                error=f"翻译失败：{e}",
-                log_lines=log_lines,
-            ))
-            return
-
-        pairs = [(c.text, r.text) for c, r in zip(chat, results)]
-        sources = [r.detected_source for r in results]
-        self.finished.emit(ChatTranslationResult(
-            screenshot_path=self._path,
-            pairs=pairs,
-            detected_sources=sources,
-            log_lines=log_lines + [f"[redraw] {len(pairs)} lines translated"],
-        ))
 
 
 # === Compose popup =========================================================

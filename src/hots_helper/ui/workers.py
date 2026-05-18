@@ -361,10 +361,23 @@ class ChatTranslationResult:
 
 
 class ChatTranslateWorker(QObject):
-    """Capture screen → OCR → filter to chat region → translate → return.
+    """Capture the screen for the chat-translate flow and stop there.
 
-    Reuses the same OCR engine the BP capture worker uses so we don't
-    pay twice for engine initialisation across the two hotkeys.
+    The OCR + translate stages used to live here too — the worker would
+    OCR the whole screen and try to filter to a "chat box" rectangle.
+    Auto-detection wasn't reliable across resolutions / windowed-vs-
+    fullscreen, and full-screen OCR was slow even when the chat box
+    only occupied 5% of the frame. The flow is now:
+
+        capture (this worker)  →  user drags a rectangle
+                               →  ChatCropTranslateWorker (small crop OCR + translate)
+                               →  popup shows the lines
+
+    so this worker just hands the screenshot path to the main window
+    and exits. ``ocr_languages`` / ``target_lang`` are kept on the
+    constructor for backwards compatibility with existing call sites,
+    but neither is used here — they're forwarded by the main window
+    to the crop worker once the user has framed the chat region.
     """
 
     progress = Signal(str)
@@ -381,33 +394,26 @@ class ChatTranslateWorker(QObject):
         ocr_languages: list[str] | None = None,
     ) -> None:
         super().__init__()
+        # Kept on the instance so the main window can reach them after
+        # the screenshot lands and pass them on to the crop worker.
         self._target_lang = target_lang
         self._ocr_languages: list[str] | None = ocr_languages
 
     def run(self) -> None:
-        from ..chat_ocr import extract_chat_lines
-        from ..ocr import recognize
-        from ..translate import TranslateError, translate
         from .screenshot import capture_fullscreen
 
         log_lines: list[str] = []
-        screenshot_path: Path | None = None
-
-        # Stage 1: screenshot.
-        t0 = time.monotonic()
-        self.progress.emit("[1/3] Capturing screen…")
+        self.progress.emit("[1/2] Capturing screen…")
         try:
-            # Same 60ms compositor-settle delay as the BP capture path.
             QThread.msleep(60)
             screenshot_path = capture_fullscreen()
             self.screenshot_taken.emit()
-            log_lines.append(f"[1/3] Screenshot: {screenshot_path}")
+            log_lines.append(f"[1/2] Screenshot: {screenshot_path}")
         except Exception as e:
             log_lines.append(
-                f"[1/3 screenshot error] {type(e).__name__}: {e}"
+                f"[1/2 screenshot error] {type(e).__name__}: {e}"
             )
             log_lines.append(traceback.format_exc())
-            # Always restore the UI on error so the user sees feedback.
             self.screenshot_taken.emit()
             self.finished.emit(ChatTranslationResult(
                 screenshot_path=None,
@@ -415,44 +421,121 @@ class ChatTranslateWorker(QObject):
                 log_lines=log_lines,
             ))
             return
+        self.finished.emit(ChatTranslationResult(
+            screenshot_path=screenshot_path,
+            log_lines=log_lines,
+        ))
 
-        # Stage 2: OCR.
+
+class ChatCropTranslateWorker(QObject):
+    """OCR a user-framed rectangle of an existing screenshot, translate
+    every line to ``target_lang``, and emit a ChatTranslationResult.
+
+    Used in two places:
+    * the brand-new chat translate flow (capture → user picks region
+      → this worker)
+    * the chat translation popup's "重选区域" button, which lets the
+      user re-frame after seeing the first result
+
+    The crop is padded with 8px black so the OCR detector sees the full
+    glyph extents even when the user drew a tight rectangle.
+    """
+
+    progress = Signal(str)
+    finished = Signal(object)  # ChatTranslationResult
+
+    def __init__(
+        self,
+        screenshot_path: Path,
+        x: int, y: int, w: int, h: int,
+        *,
+        target_lang: str = "zh",
+        ocr_languages: list[str] | None = None,
+    ) -> None:
+        super().__init__()
+        self._path = screenshot_path
+        self._x = x
+        self._y = y
+        self._w = w
+        self._h = h
+        self._target_lang = target_lang
+        self._ocr_languages: list[str] | None = ocr_languages
+
+    def run(self) -> None:
+        import tempfile
+        from PIL import Image
+
+        from ..chat_ocr import filter_chat_blocks
+        from ..ocr import recognize
+        from ..translate import TranslateError, translate
+
+        log_lines: list[str] = []
+
+        # 1. Crop + pad.
+        self.progress.emit("[1/3] 裁剪选中区域…")
+        try:
+            with Image.open(self._path) as im:
+                crop = im.crop(
+                    (self._x, self._y, self._x + self._w, self._y + self._h)
+                )
+                pad = 8
+                padded = Image.new(
+                    "RGB",
+                    (crop.width + 2 * pad, crop.height + 2 * pad),
+                    (0, 0, 0),
+                )
+                padded.paste(crop, (pad, pad))
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                    tmp_path = Path(f.name)
+                padded.save(tmp_path)
+        except Exception as e:
+            log_lines.append(f"[1/3 crop error] {type(e).__name__}: {e}")
+            log_lines.append(traceback.format_exc())
+            self.finished.emit(ChatTranslationResult(
+                screenshot_path=self._path,
+                error=f"裁剪失败：{e}",
+                log_lines=log_lines,
+            ))
+            return
+
+        # 2. OCR the crop.
+        self.progress.emit("[2/3] 识别选中区域文字…")
         t1 = time.monotonic()
-        self.progress.emit("[2/3] 识别屏幕文字…")
         try:
             blocks = recognize(
-                screenshot_path,
+                tmp_path,
                 progress=lambda m: self.progress.emit(f"      {m}"),
                 languages=self._ocr_languages,
             )
             log_lines.append(
-                f"[2/3] OCR returned {len(blocks)} blocks in "
-                f"{time.monotonic() - t1:.1f}s"
+                f"[2/3] OCR {len(blocks)} block(s) in {time.monotonic()-t1:.1f}s"
             )
         except Exception as e:
             log_lines.append(f"[2/3 OCR error] {type(e).__name__}: {e}")
             log_lines.append(traceback.format_exc())
             self.finished.emit(ChatTranslationResult(
-                screenshot_path=screenshot_path,
+                screenshot_path=self._path,
                 error=f"OCR 失败：{e}",
                 log_lines=log_lines,
             ))
             return
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
-        chat = extract_chat_lines(blocks)
+        chat = filter_chat_blocks(blocks)
         log_lines.append(
-            f"[2/3] {len(chat)} block(s) match the chat region heuristic"
+            f"[2/3] {len(chat)} block(s) survive content filter"
         )
         if not chat:
             self.finished.emit(ChatTranslationResult(
-                screenshot_path=screenshot_path,
+                screenshot_path=self._path,
                 pairs=[],
                 log_lines=log_lines,
             ))
             return
 
-        # Stage 3: translate.
-        self.progress.emit(f"[3/3] 翻译 {len(chat)} 行聊天…")
+        # 3. Translate.
+        self.progress.emit(f"[3/3] 翻译 {len(chat)} 行…")
         try:
             results = translate(
                 [c.text for c in chat],
@@ -462,7 +545,7 @@ class ChatTranslateWorker(QObject):
         except TranslateError as e:
             log_lines.append(f"[3/3 translate error] {e}")
             self.finished.emit(ChatTranslationResult(
-                screenshot_path=screenshot_path,
+                screenshot_path=self._path,
                 error=f"翻译失败：{e}",
                 log_lines=log_lines,
             ))
@@ -470,11 +553,9 @@ class ChatTranslateWorker(QObject):
 
         pairs = [(c.text, r.text) for c, r in zip(chat, results)]
         sources = [r.detected_source for r in results]
-        log_lines.append(
-            f"[3/3] Done in {time.monotonic() - t0:.1f}s total"
-        )
+        log_lines.append(f"[3/3] Translated {len(pairs)} line(s)")
         self.finished.emit(ChatTranslationResult(
-            screenshot_path=screenshot_path,
+            screenshot_path=self._path,
             pairs=pairs,
             detected_sources=sources,
             log_lines=log_lines,

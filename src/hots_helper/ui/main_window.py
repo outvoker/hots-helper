@@ -54,6 +54,7 @@ from .theme import (
     TEXT_DIM,
 )
 from .workers import (
+    ChatCropTranslateWorker,
     ChatTranslateWorker,
     ChatTranslationResult,
     HotkeyShotResult,
@@ -457,6 +458,11 @@ class MainWindow(QMainWindow):
         self._compose_popup: ComposeTranslatePopup | None = None
         self._chat_trans_thread: QThread | None = None
         self._chat_trans_worker: ChatTranslateWorker | None = None
+        # Stage-2 crop+OCR+translate worker (started after the user
+        # finishes framing the chat region in the region selector).
+        self._chat_crop_thread: QThread | None = None
+        self._chat_crop_worker: ChatCropTranslateWorker | None = None
+        self._chat_trans_screenshot: Path | None = None
         self._chat_trans_busy = False
 
         # Floating always-on-top launcher. The whole reason this exists
@@ -1225,13 +1231,11 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_screenshot_taken_chat(self) -> None:
-        """Worker tells us the chat-OCR frame is on disk → show the
-        progress dialog (chat-flavored copy) and restore the launcher.
-
-        Same anchor=None reasoning as :meth:`_on_screenshot_taken_bp`
-        — never use the main window as anchor, it pulls focus."""
+        """Worker tells us the chat-OCR frame is on disk → just restore
+        the helper UI. We deliberately don't show the progress card here
+        any more: nothing OCR-shaped is happening yet — the user is
+        about to draw a region."""
         self._restore_helper_overlays_after_capture()
-        self.capture_progress.start(anchor=None, flow="chat")
 
     def _cleanup_chat_translate_thread(self) -> None:
         if self._chat_trans_worker is not None:
@@ -1243,6 +1247,92 @@ class MainWindow(QMainWindow):
         self._chat_trans_busy = False
 
     def _on_chat_translate_finished(self, result: ChatTranslationResult) -> None:
+        """First stage finished — just a screenshot. If we got one,
+        prompt the user to draw a chat region; the actual OCR + translate
+        stage is the :class:`ChatCropTranslateWorker` kicked off in
+        ``_on_chat_region_picked``."""
+        for line in result.log_lines:
+            self._log(line)
+
+        if result.error or not result.screenshot_path:
+            # Capture itself failed — surface the error in a popup so
+            # the user knows why nothing happened. Reuse the chat
+            # translation popup since it already renders error strings.
+            if self._chat_trans_popup is None:
+                self._chat_trans_popup = ChatTranslationPopup()
+            self._chat_trans_popup.show_result(result)
+            return
+
+        # Stash so the crop worker can read these in its callback.
+        self._chat_trans_screenshot: Path = result.screenshot_path
+        self._chat_trans_log_prefix: list[str] = list(result.log_lines)
+
+        # Open the region selector. We want the helper UI fully restored
+        # before we open the dialog so the user sees the screenshot
+        # behind the dialog rather than a half-painted helper window.
+        from .region_select import RegionSelectorDialog
+        try:
+            dlg = RegionSelectorDialog(
+                result.screenshot_path, parent=self
+            )
+        except Exception as e:
+            self._log(f"[chat-trans] cannot open region selector: {e}")
+            self._chat_trans_busy = False
+            return
+        dlg.region_picked.connect(self._on_chat_region_picked)
+        # Use exec() so the helper UI doesn't take input until the
+        # user finishes the selection or cancels. Return code != 1
+        # means the user hit Esc / clicked a tiny rect — release the
+        # busy flag so the next hotkey press isn't ignored.
+        if dlg.exec() != 1:
+            self._chat_trans_busy = False
+            self._log("[chat-trans] region selection cancelled")
+
+    def _on_chat_region_picked(
+        self, x: int, y: int, w: int, h: int
+    ) -> None:
+        """User finished framing the chat box → run OCR + translate
+        on just that crop. Tiny region = sub-second OCR even with all
+        three language packs enabled."""
+        screenshot_path = getattr(self, "_chat_trans_screenshot", None)
+        if not screenshot_path:
+            return
+
+        # Only show the progress card now: this is when actual work
+        # starts. ``flow="chat"`` keeps the progress copy ("识别选中区
+        # 域文字" etc.) consistent with the chat translate use case.
+        self.capture_progress.start(anchor=None, flow="chat")
+
+        thread = QThread(self)
+        worker = ChatCropTranslateWorker(
+            screenshot_path=screenshot_path,
+            x=x, y=y, w=w, h=h,
+            target_lang="zh",
+            ocr_languages=list(self.config.ocr_languages),
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._log)
+        worker.progress.connect(self.capture_progress.update_substatus)
+        worker.finished.connect(self._on_chat_crop_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(self._cleanup_chat_crop_thread)
+        self._chat_crop_thread = thread
+        self._chat_crop_worker = worker
+        thread.start()
+
+    def _cleanup_chat_crop_thread(self) -> None:
+        if getattr(self, "_chat_crop_worker", None) is not None:
+            self._chat_crop_worker.deleteLater()
+            self._chat_crop_worker = None
+        if getattr(self, "_chat_crop_thread", None) is not None:
+            self._chat_crop_thread.deleteLater()
+            self._chat_crop_thread = None
+        self._chat_trans_busy = False
+
+    def _on_chat_crop_finished(
+        self, result: ChatTranslationResult
+    ) -> None:
         for line in result.log_lines:
             self._log(line)
         ok = bool(result.pairs) and not result.error
@@ -1250,8 +1340,9 @@ class MainWindow(QMainWindow):
             ok=ok,
             message=result.error if result.error else None,
         )
-        if self._chat_trans_popup is not None:
-            self._chat_trans_popup.show_result(result)
+        if self._chat_trans_popup is None:
+            self._chat_trans_popup = ChatTranslationPopup()
+        self._chat_trans_popup.show_result(result)
 
     # --- compose translate hotkey -------------------------------------------
 
@@ -1288,6 +1379,9 @@ class MainWindow(QMainWindow):
         if self._chat_trans_thread is not None:
             self._chat_trans_thread.quit()
             self._chat_trans_thread.wait(3000)
+        if self._chat_crop_thread is not None:
+            self._chat_crop_thread.quit()
+            self._chat_crop_thread.wait(3000)
         if self._sync_thread is not None:
             self._sync_thread.quit()
             self._sync_thread.wait(3000)
