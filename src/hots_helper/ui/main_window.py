@@ -391,6 +391,8 @@ class MainWindow(QMainWindow):
         self._scan_worker: ScanWorker | None = None
         # Lazily created when the user first clicks the ARAM button.
         self._aram_dialog = None
+        # Lazily created when the user first clicks the player-rankings button.
+        self._player_rank_dialog = None
         # Cloud sync runtime
         self._sync_thread: QThread | None = None
         self._sync_worker: SyncWorker | None = None
@@ -623,7 +625,7 @@ class MainWindow(QMainWindow):
         head.addLayout(title_box, 1)
         v.addLayout(head)
 
-        # Two big mode buttons.
+        # Mode buttons — hero strength leaderboards…
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
         self.sl_btn = QPushButton()
@@ -636,7 +638,18 @@ class MainWindow(QMainWindow):
         self.aram_btn.setMinimumHeight(40)
         btn_row.addWidget(self.aram_btn)
         v.addLayout(btn_row)
-        for b in (self.sl_btn, self.aram_btn):
+
+        # …and one row below for the player-side leaderboards (worst
+        # teammates / strongest opponents).
+        player_row = QHBoxLayout()
+        player_row.setSpacing(10)
+        self.player_rank_btn = QPushButton()
+        self.player_rank_btn.clicked.connect(self._show_player_rankings)
+        self.player_rank_btn.setMinimumHeight(36)
+        player_row.addWidget(self.player_rank_btn)
+        v.addLayout(player_row)
+
+        for b in (self.sl_btn, self.aram_btn, self.player_rank_btn):
             b.style().unpolish(b)
             b.style().polish(b)
         # Trailing flexible space so the card matches the BP card's height.
@@ -721,6 +734,8 @@ class MainWindow(QMainWindow):
         self.sl_btn.setToolTip(t("ui.main.sl_ranking_tip"))
         self.aram_btn.setText(t("ui.main.aram_ranking"))
         self.aram_btn.setToolTip(t("ui.main.aram_ranking_tip"))
+        self.player_rank_btn.setText(t("ui.main.player_ranking"))
+        self.player_rank_btn.setToolTip(t("ui.main.player_ranking_tip"))
 
         self.log_box.setTitle(t("ui.main.activity"))
         self.credit_label.setText(t("ui.main.credit"))
@@ -1003,6 +1018,22 @@ class MainWindow(QMainWindow):
             self._sync_thread.deleteLater()
             self._sync_thread = None
         self._sync_busy = False
+
+    def _show_player_rankings(self) -> None:
+        """Open the worst-teammate / strongest-opponent leaderboard."""
+        if (
+            not hasattr(self, "_player_rank_dialog")
+            or self._player_rank_dialog is None
+        ):
+            from .player_rank_dialog import PlayerRankDialog
+            self._player_rank_dialog = PlayerRankDialog(
+                self.store, parent=self
+            )
+        else:
+            self._player_rank_dialog._reload()
+        self._player_rank_dialog.show()
+        self._player_rank_dialog.raise_()
+        self._player_rank_dialog.activateWindow()
 
     def _show_hero_ranking(self, mode: str = "ARAM") -> None:
         """Open the hero-strength dialog focused on the given mode.

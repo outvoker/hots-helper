@@ -56,6 +56,7 @@ from ..db import Store
 from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
 from ..maps import all_maps
+from ..player_rank import PlayerRankRow, compute_rankings
 from ..talent_names import talent_label
 from .macos_overlay import make_overlay_floating
 from .theme import (
@@ -192,8 +193,12 @@ class _PlayerCard(QFrame):
     def __init__(self, *, accent: str) -> None:
         super().__init__()
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet(
-            f"QFrame {{ background: {BG_DEEP}; color: {TEXT};"
+        # Object name lets us scope the QSS border-color override that
+        # ``set_flag`` applies (otherwise the rule would cascade to
+        # every QFrame inside, including the inner sub-cards).
+        self.setObjectName("playerCard")
+        self._base_qss = (
+            f"QFrame#playerCard {{ background: {BG_DEEP}; color: {TEXT};"
             f"          border: 1px solid {LINE}; border-radius: 8px; }}"
             f"QLineEdit {{ background: {BG_INPUT}; color: {TEXT};"
             f"            border: 1px solid {LINE}; padding: 3px 6px; font-size: 11pt; }}"
@@ -206,6 +211,7 @@ class _PlayerCard(QFrame):
             f"                    border-color: {GOLD_DIM};"
             f"                    color: {GOLD_BRIGHT}; }}"
         )
+        self.setStyleSheet(self._base_qss)
         self._expanded = False
         self._summaries: list[PlayerSummary] = []
 
@@ -261,6 +267,13 @@ class _PlayerCard(QFrame):
         self.resolved.setVisible(False)
         v.addWidget(self.resolved)
 
+        # Leaderboard flag — only visible when this slot's handle shows
+        # up on the worst-teammate board (ally side) or the strongest-
+        # opponent board (enemy side). Styled by ``set_flag``.
+        self.flag_label = QLabel("")
+        self.flag_label.setVisible(False)
+        v.addWidget(self.flag_label)
+
         # Body
         self.body = QLabel("")
         self.body.setWordWrap(True)
@@ -306,10 +319,56 @@ class _PlayerCard(QFrame):
         self._summaries = summaries
         self._render()
 
+    def set_flag(self, kind: str, rank: int, games: int, win_rate: float) -> None:
+        """Visually flag this slot when its handle is on a leaderboard.
+
+        ``kind`` is ``"worst"`` for the worst-teammate board (only
+        relevant for ally slots) or ``"best"`` for the strongest-
+        opponent board (only relevant for enemy slots). The card grows
+        a coloured outline + a banner label above the body. Pass
+        ``kind=""`` to clear.
+        """
+        if not kind:
+            self.flag_label.hide()
+            self.flag_label.setText("")
+            self.setStyleSheet(self._base_qss)
+            return
+
+        wr_pct = int(round(win_rate * 100))
+        if kind == "worst":
+            text = t(
+                "ui.popup.card.flag_worst",
+                rank=rank, games=games, wr=wr_pct,
+            )
+            tone = "#e08585"   # warning red
+            tone_bg = "#3a1a1a"
+        else:
+            text = t(
+                "ui.popup.card.flag_best",
+                rank=rank, games=games, wr=wr_pct,
+            )
+            tone = GOLD_BRIGHT
+            tone_bg = "#3a2c10"
+        self.flag_label.setText(text)
+        self.flag_label.setStyleSheet(
+            f"background:{tone_bg}; color:{tone};"
+            f" border:1px solid {tone}; border-radius:4px;"
+            f" padding:2px 6px; font-weight:600; font-size:9pt;"
+        )
+        self.flag_label.show()
+        # Re-skin the card with a 2px coloured border so it pops next
+        # to neighbouring cards. Keep all other styling identical to
+        # the base QSS.
+        self.setStyleSheet(
+            self._base_qss
+            + f"\nQFrame#playerCard {{ border: 2px solid {tone}; }}"
+        )
+
     def clear(self) -> None:
         self._summaries = []
         self.resolved.setVisible(False)
         self.body.setText("")
+        self.set_flag("", 0, 0, 0.0)
 
     def _toggle_expanded(self, checked: bool) -> None:
         self._expanded = checked
@@ -964,6 +1023,70 @@ class PopupWindow(QWidget):
                 t("ui.popup.region.no_text_body"),
             )
 
+    # --- leaderboard-driven highlight ---------------------------------------
+
+    def _refresh_rank_indices(self) -> None:
+        """Recompute the worst-teammate / strongest-opponent indices.
+
+        Called once per ``_run_analysis`` pass so the flag on each card
+        reflects the latest DB state (a freshly ingested replay may
+        bump someone onto or off the board). We use a generous top-30
+        so even mid-pack bad players get a heads-up; below that, sample
+        sizes get noisy and the flag is more annoying than useful.
+        """
+        try:
+            worst, best = compute_rankings(
+                self.store, min_games=5, limit=30,
+            )
+        except Exception:
+            # Database hiccups shouldn't bring down the whole BP flow —
+            # the flag is a nice-to-have, not load-bearing.
+            worst, best = [], []
+        self._worst_by_handle: dict[str, PlayerRankRow] = {
+            p.toon_handle: p for p in worst if p.toon_handle
+        }
+        self._best_by_handle: dict[str, PlayerRankRow] = {
+            p.toon_handle: p for p in best if p.toon_handle
+        }
+
+    def _apply_flag(
+        self,
+        card: "_PlayerCard",
+        summaries: list[PlayerSummary],
+        *,
+        side: str,
+    ) -> None:
+        """Light up ``card`` if its handle matches the relevant board.
+
+        ``side`` is ``"ally"`` (check worst-teammate board) or
+        ``"enemy"`` (check strongest-opponent board). When the same
+        display name resolves to multiple handles we pick the
+        worst-ranked match — the flag is meant as a "do something
+        about this" warning.
+        """
+        if not summaries:
+            card.set_flag("", 0, 0, 0.0)
+            return
+        index = self._worst_by_handle if side == "ally" else self._best_by_handle
+        kind = "worst" if side == "ally" else "best"
+        best_match: PlayerRankRow | None = None
+        for s in summaries:
+            hit = index.get(s.toon_handle)
+            if hit is None:
+                continue
+            # Lower rank number = higher position on the board.
+            if best_match is None or hit.rank < best_match.rank:
+                best_match = hit
+        if best_match is None:
+            card.set_flag("", 0, 0, 0.0)
+            return
+        card.set_flag(
+            kind=kind,
+            rank=best_match.rank,
+            games=best_match.games,
+            win_rate=best_match.win_rate,
+        )
+
     def _refresh_bans(self) -> None:
         """Re-run the two ban analyses (opponent-history + map-tier)."""
         ally_names = [c.name for c in self._ally_cards if c.name]
@@ -1006,6 +1129,12 @@ class PopupWindow(QWidget):
         # consecutive hotkey presses isn't reflected in the per-player
         # cards or BP recommendations until the app is restarted.
         self.store.drop_read_snapshot()
+        # Refresh the leaderboards once per analysis pass so the
+        # highlight on each player card reflects the current DB state.
+        # Top 30 of each board is a comfortable cutoff: anything below
+        # that has too little signal to justify a "watch out" flag, and
+        # the SQL is cheap enough we don't bother caching across runs.
+        self._refresh_rank_indices()
         map_name = self.map_edit.currentText().strip() or None
         ally_names = [c.name for c in self._ally_cards]
         enemy_names = [c.name for c in self._enemy_cards]
@@ -1050,12 +1179,17 @@ class PopupWindow(QWidget):
             lookup_players(self.store, names, map_name=map_name)
             if names else {}
         )
-        for cards in (self._ally_cards, self._enemy_cards):
+        for cards, side in (
+            (self._ally_cards, "ally"),
+            (self._enemy_cards, "enemy"),
+        ):
             for card in cards:
                 if not card.name:
                     card.clear()
                     continue
-                card.set_summaries(summaries.get(card.name, []))
+                slot_summaries = summaries.get(card.name, [])
+                card.set_summaries(slot_summaries)
+                self._apply_flag(card, slot_summaries, side=side)
 
     def _requery_single(self, card: _PlayerCard) -> None:
         name = card.name
@@ -1072,6 +1206,15 @@ class PopupWindow(QWidget):
             .get(name, [])
         )
         card.set_summaries(summaries)
+        # Reapply leaderboard flag — the user may have corrected an
+        # OCR misread to a name that does (or doesn't) match a board.
+        side = "ally" if card in self._ally_cards else "enemy"
+        # If the rank index hasn't been built yet (e.g. user re-queried
+        # a single card before opening the popup via the BP flow), do
+        # it now so the flag check has data to work with.
+        if not hasattr(self, "_worst_by_handle"):
+            self._refresh_rank_indices()
+        self._apply_flag(card, summaries, side=side)
         # A single-card correction may shift the ban list (any side change
         # can affect map-tier bans through ally squad detection).
         self._refresh_bans()

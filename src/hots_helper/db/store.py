@@ -579,6 +579,86 @@ class Store:
             (toon_handle, *mode_params, limit),
         ).fetchall()
 
+    # --- player rankings ----------------------------------------------------
+
+    def player_rankings(
+        self,
+        *,
+        min_games: int = 5,
+        limit: int = 200,
+        exclude_handles: tuple[str, ...] = (),
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+    ) -> list[sqlite3.Row]:
+        """All players who appear in ``mode_filter`` games (excluding
+        ``exclude_handles``), aggregated for the "kingmakers / boogeymen"
+        boards.
+
+        The squad's own handles are excluded so the ranking is "everyone
+        we've ever encountered" rather than "us plus everyone else". The
+        caller (the leaderboard dialog) supplies the exclude set.
+        """
+        clause, mode_params = _mode_clause(mode_filter)
+        excl_clause = ""
+        excl_params: list[Any] = []
+        if exclude_handles:
+            placeholders = ",".join("?" for _ in exclude_handles)
+            excl_clause = f" AND pm.toon_handle NOT IN ({placeholders})"
+            excl_params = list(exclude_handles)
+
+        return self.conn.execute(
+            f"""
+            SELECT pm.toon_handle,
+                   COALESCE(p.display_name, MAX(pm.display_name)) AS display_name,
+                   COUNT(*) AS games,
+                   SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
+                   AVG(pm.kills)        AS avg_k,
+                   AVG(pm.deaths)       AS avg_d,
+                   AVG(pm.assists)      AS avg_a,
+                   AVG(pm.hero_damage)  AS avg_hero_dmg,
+                   AVG(pm.healing)      AS avg_healing,
+                   AVG(pm.experience_contribution) AS avg_xp,
+                   MAX(r.played_at)     AS last_seen_at
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            LEFT JOIN players p ON p.toon_handle = pm.toon_handle
+            WHERE 1=1{clause}{excl_clause}
+            GROUP BY pm.toon_handle
+            HAVING COUNT(*) >= ?
+            ORDER BY games DESC
+            LIMIT ?
+            """,
+            (*mode_params, *excl_params, min_games, limit),
+        ).fetchall()
+
+    def squad_handles(
+        self,
+        *,
+        min_games: int = 20,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+    ) -> set[str]:
+        """Heuristic: handles that show up *very often* in our DB are us.
+
+        We don't store an explicit "this is our squad" list anywhere — the
+        DB is just every replay we've ever ingested. But the squad has
+        played hundreds of games together, and random opponents almost
+        never reappear. So the top of the play-frequency distribution is
+        the squad. Used to filter ourselves out of the kingmaker /
+        boogeyman boards.
+        """
+        clause, mode_params = _mode_clause(mode_filter)
+        rows = self.conn.execute(
+            f"""
+            SELECT pm.toon_handle, COUNT(*) AS games
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            WHERE 1=1{clause}
+            GROUP BY pm.toon_handle
+            HAVING games >= ?
+            """,
+            (*mode_params, min_games),
+        ).fetchall()
+        return {r["toon_handle"] for r in rows}
+
     # --- hero-centric analytics ---------------------------------------------
 
     def all_heroes(

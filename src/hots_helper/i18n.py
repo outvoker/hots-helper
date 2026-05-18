@@ -351,6 +351,73 @@ _translations: dict[str, dict[str, str]] = {
         "en": "OCR languages saved: {langs}",
     },
 
+    # === Player rank leaderboards ========================================
+    "ui.main.player_ranking": {
+        "zh": "玩家排行榜",
+        "en": "Player rankings",
+    },
+    "ui.main.player_ranking_tip": {
+        "zh": "最坑队友 / 最强对手榜 — BP 时榜单玩家会被高亮",
+        "en": "Hall of shame & hall of fame — these handles get highlighted in BP",
+    },
+    "ui.rank.window_title": {
+        "zh": "玩家排行榜",
+        "en": "Player rankings",
+    },
+    "ui.rank.title": {
+        "zh": "玩家排行榜",
+        "en": "Player rankings",
+    },
+    "ui.rank.worst_title": {
+        "zh": "🪦 最坑队友（胜率最低）",
+        "en": "🪦 Worst teammates (lowest win rate)",
+    },
+    "ui.rank.best_title": {
+        "zh": "👑 最强对手（胜率最高）",
+        "en": "👑 Strongest opponents (highest win rate)",
+    },
+    "ui.rank.limit_label": {
+        "zh": "显示前",
+        "en": "Show top",
+    },
+    "ui.rank.include_squad": {
+        "zh": "包含我方常驻玩家",
+        "en": "Include squad members",
+    },
+    "ui.rank.summary": {
+        "zh": "最少 {min_games} 局起算 · 坑队友 {worst} 人 · 强对手 {best} 人",
+        "en": "{min_games}+ games · {worst} worst teammates · {best} strongest opponents",
+    },
+    "ui.rank.footer": {
+        "zh": "<span style='color:#888;'>"
+              "排序按 Wilson 95% 置信下界（避免 1 局 100% 上榜）。"
+              "BP 分析时，榜单上的玩家会在卡片上高亮提示。"
+              "</span>",
+        "en": "<span style='color:#888;'>"
+              "Sorted by Wilson 95% lower bound on win rate (so a 1-game streak can't top the chart). "
+              "Players on this board are highlighted when they show up in BP analysis."
+              "</span>",
+    },
+    "ui.rank.col_rank":     {"zh": "#",       "en": "#"},
+    "ui.rank.col_name":     {"zh": "玩家",    "en": "Player"},
+    "ui.rank.col_games":    {"zh": "局数",    "en": "Games"},
+    "ui.rank.col_wins":     {"zh": "胜",      "en": "Wins"},
+    "ui.rank.col_wr":       {"zh": "胜率",    "en": "WR"},
+    "ui.rank.col_wlb":      {"zh": "保守胜率", "en": "WLB"},
+    "ui.rank.col_kda":      {"zh": "K/D/A",  "en": "K/D/A"},
+    "ui.rank.col_hero_dmg": {"zh": "英雄伤害","en": "Hero dmg"},
+    "ui.rank.col_healing":  {"zh": "治疗",    "en": "Healing"},
+
+    # Highlights on the BP popup player cards.
+    "ui.popup.card.flag_worst": {
+        "zh": "🪦 最坑队友榜 #{rank}（{games} 局 · 胜率 {wr}%）",
+        "en": "🪦 Worst-teammate board #{rank} ({games}g · {wr}% WR)",
+    },
+    "ui.popup.card.flag_best": {
+        "zh": "👑 最强对手榜 #{rank}（{games} 局 · 胜率 {wr}%）",
+        "en": "👑 Strongest-opponent board #{rank} ({games}g · {wr}% WR)",
+    },
+
     # === Floating launcher ===============================================
     "ui.launcher.tooltip": {
         "zh": "点击展开 — BP 分析 / 公屏翻译 / 中文转译\n拖动可移动位置",
