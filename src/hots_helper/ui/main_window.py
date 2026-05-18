@@ -37,6 +37,7 @@ from ..watcher.ingest import IngestResult
 from .capture_progress import CaptureProgressDialog
 from .hotkey import HotkeyManager
 from .hotkey_field import HotkeyField
+from .launcher import FloatingLauncher
 from .popup import PopupWindow
 from .translate_popup import ChatTranslationPopup, ComposeTranslatePopup
 from .theme import (
@@ -293,6 +294,18 @@ class MainWindow(QMainWindow):
         tb.addLayout(compose_row)
         sp.addWidget(self.trans_box)
 
+        # Floating launcher toggle — single checkbox, persisted to config.
+        # Wraps it in a QGroupBox so it visually groups with the other
+        # settings sections.
+        self.launcher_box = QGroupBox()
+        lbox = QHBoxLayout(self.launcher_box)
+        self.launcher_chk = QCheckBox()
+        self.launcher_chk.setChecked(self.config.launcher_visible)
+        self.launcher_chk.stateChanged.connect(self._toggle_launcher_visible)
+        lbox.addWidget(self.launcher_chk)
+        lbox.addStretch(1)
+        sp.addWidget(self.launcher_box)
+
         # Settings panel sits below the toggle, expandable on click.
         self.settings_panel.setVisible(False)
         root.addWidget(self.settings_panel)
@@ -383,6 +396,21 @@ class MainWindow(QMainWindow):
         self._chat_trans_thread: QThread | None = None
         self._chat_trans_worker: ChatTranslateWorker | None = None
         self._chat_trans_busy = False
+
+        # Floating always-on-top launcher. The whole reason this exists
+        # is that on Windows, HotS / Battle.net commonly run elevated
+        # while our helper doesn't, and Windows UIPI silently drops
+        # global keyboard events from a non-elevated process to an
+        # elevated one. Mouse clicks on a top-most window aren't
+        # affected, so the launcher works regardless of admin parity.
+        self.launcher = FloatingLauncher(
+            self.config,
+            on_bp=lambda: self._on_hotkey(sample_path=None),
+            on_chat_translate=self._on_chat_translate_hotkey,
+            on_compose_translate=self._on_compose_translate_hotkey,
+        )
+        if self.config.launcher_visible:
+            self.launcher.show()
 
         # Seed UI from config.
         self._refresh_roots()
@@ -643,6 +671,9 @@ class MainWindow(QMainWindow):
         self.chat_hk_field.retranslate()
         self.compose_hk_field.retranslate()
 
+        self.launcher_box.setTitle(t("ui.main.launcher_section"))
+        self.launcher_chk.setText(t("ui.main.launcher_visible"))
+
         # Refresh derived labels that include translated text.
         self._refresh_roots()
         self._refresh_stats()
@@ -834,6 +865,16 @@ class MainWindow(QMainWindow):
     def _toggle_sync_auto(self, state: int) -> None:
         self.config.sync_auto = bool(state)
         self.config.save()
+
+    def _toggle_launcher_visible(self, state: int) -> None:
+        visible = bool(state)
+        self.config.launcher_visible = visible
+        self.config.save()
+        if visible:
+            self.launcher.show()
+            self.launcher.raise_()
+        else:
+            self.launcher.hide()
 
     def _start_sync(self, *, force: bool) -> None:
         if self._cloud_sync is None:
@@ -1075,4 +1116,6 @@ class MainWindow(QMainWindow):
             self._chat_trans_popup.close()
         if self._compose_popup is not None:
             self._compose_popup.close()
+        if self.launcher is not None:
+            self.launcher.close()
         super().closeEvent(event)

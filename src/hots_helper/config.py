@@ -110,6 +110,13 @@ class Config:
     # Chinese, picks target language, gets translation back to copy.
     # Default: <ctrl>+<shift>+y (next to T on QWERTY).
     compose_translate_hotkey: str = "<ctrl>+<shift>+y"
+    # Floating always-on-top launcher: visible by default. Position is
+    # remembered so the chip stays where the user dragged it. Negative
+    # ``-1`` means "we haven't placed it yet — drop into a sensible
+    # default corner on next launch".
+    launcher_visible: bool = True
+    launcher_x: int = -1
+    launcher_y: int = -1
     # If True, run the watcher in the background on UI start.
     auto_watch: bool = True
     # UI locale, "zh" or "en".
@@ -138,6 +145,9 @@ class Config:
             compose_translate_hotkey=str(
                 raw.get("compose_translate_hotkey") or "<ctrl>+<shift>+y"
             ),
+            launcher_visible=bool(raw.get("launcher_visible", True)),
+            launcher_x=int(raw.get("launcher_x") or -1),
+            launcher_y=int(raw.get("launcher_y") or -1),
             auto_watch=bool(raw.get("auto_watch", True)),
             language=str(raw.get("language") or "zh"),
             supabase_url=str(raw.get("supabase_url") or ""),

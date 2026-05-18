@@ -318,6 +318,23 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "翻译快捷键",
         "en": "Translation hotkeys",
     },
+    "ui.main.launcher_section": {
+        "zh": "悬浮启动器",
+        "en": "Floating launcher",
+    },
+    "ui.main.launcher_visible": {
+        "zh": "显示置顶悬浮按钮（点击展开 BP / 翻译 / 转译）",
+        "en": "Show always-on-top floating chip (click to reveal BP / translate / compose)",
+    },
+
+    # === Floating launcher ===============================================
+    "ui.launcher.tooltip": {
+        "zh": "点击展开 — BP 分析 / 公屏翻译 / 中文转译\n拖动可移动位置",
+        "en": "Click to reveal — BP / chat translate / compose translate\nDrag to move",
+    },
+    "ui.launcher.bp": {"zh": "BP 分析", "en": "BP scout"},
+    "ui.launcher.chat": {"zh": "公屏翻译", "en": "Chat trans"},
+    "ui.launcher.compose": {"zh": "中文转译", "en": "Compose"},
     "ui.main.chat_translate_label": {
         "zh": "公屏聊天翻译：",
         "en": "Translate game chat:",

@@ -156,6 +156,8 @@ hiddenimports = [
     "hots_helper.chat_ocr",
     "hots_helper.ui.translate_popup",
     "hots_helper.ui.capture_progress",
+    "hots_helper.ui.launcher",
+    "hots_helper.ui.hotkey_field",
     # PySide6 modules referenced only lazily
     "PySide6.QtCore",
     "PySide6.QtGui",
