@@ -412,9 +412,28 @@ _translations: dict[str, dict[str, str]] = {
     "ui.rank.col_wins":     {"zh": "胜",      "en": "Wins"},
     "ui.rank.col_wr":       {"zh": "胜率",    "en": "WR"},
     "ui.rank.col_wlb":      {"zh": "保守胜率", "en": "WLB"},
+    "ui.rank.col_power":    {"zh": "战斗力",   "en": "Power"},
     "ui.rank.col_kda":      {"zh": "K/D/A",  "en": "K/D/A"},
     "ui.rank.col_hero_dmg": {"zh": "英雄伤害","en": "Hero dmg"},
+    "ui.rank.col_struct":   {"zh": "推塔",    "en": "Struct"},
     "ui.rank.col_healing":  {"zh": "治疗",    "en": "Healing"},
+    "ui.rank.col_soak":     {"zh": "硬币",    "en": "Soak"},
+    "ui.rank.col_xp":       {"zh": "经验",    "en": "XP"},
+    "ui.rank.sort": {"zh": "排序", "en": "Sort"},
+    "ui.rank.sort_wlb": {
+        "zh": "保守胜率（Wilson 下界）",
+        "en": "Conservative WR (Wilson LB)",
+    },
+    "ui.rank.sort_power": {
+        "zh": "综合战斗力",
+        "en": "Combat power",
+    },
+    "ui.rank.sort_tip": {
+        "zh": "保守胜率：按 Wilson 95% 下界排序，避免 1 局上榜。\n"
+              "综合战斗力：胜率 + KDA + 伤害 + 推塔 + 治疗 + 硬币 + 经验 + 控制 加权综合。",
+        "en": "Conservative WR: Wilson 95% lower bound — small samples can't top the chart.\n"
+              "Combat power: weighted blend of WR + KDA + damage + structure + healing + soak + XP + CC.",
+    },
 
     # Highlights on the BP popup player cards.
     "ui.popup.card.flag_worst": {

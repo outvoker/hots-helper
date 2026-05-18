@@ -625,13 +625,18 @@ class Store:
                    COALESCE(p.display_name, MAX(pm.display_name)) AS display_name,
                    COUNT(*) AS games,
                    SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
-                   AVG(pm.kills)        AS avg_k,
-                   AVG(pm.deaths)       AS avg_d,
-                   AVG(pm.assists)      AS avg_a,
-                   AVG(pm.hero_damage)  AS avg_hero_dmg,
-                   AVG(pm.healing)      AS avg_healing,
+                   AVG(pm.kills)            AS avg_k,
+                   AVG(pm.deaths)           AS avg_d,
+                   AVG(pm.assists)          AS avg_a,
+                   AVG(pm.hero_damage)      AS avg_hero_dmg,
+                   AVG(pm.siege_damage)     AS avg_siege_dmg,
+                   AVG(pm.structure_damage) AS avg_structure_dmg,
+                   AVG(pm.healing)          AS avg_healing,
+                   AVG(pm.damage_taken)     AS avg_dmg_taken,
+                   AVG(pm.damage_soaked)    AS avg_dmg_soaked,
                    AVG(pm.experience_contribution) AS avg_xp,
-                   MAX(r.played_at)     AS last_seen_at
+                   AVG(pm.time_cc_enemy_heroes) AS avg_cc,
+                   MAX(r.played_at)         AS last_seen_at
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
             JOIN (

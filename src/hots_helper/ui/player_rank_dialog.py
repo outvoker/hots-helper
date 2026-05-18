@@ -34,11 +34,14 @@ from ..db import Store
 from ..i18n import on_change as on_lang_change, t
 from ..player_rank import (
     ALL_BOARDS,
+    ALL_SORTS,
     BOARD_BEST_OPPONENT,
     BOARD_BEST_TEAMMATE,
     BOARD_WORST_OPPONENT,
     BOARD_WORST_TEAMMATE,
     PlayerRankRow,
+    SORT_POWER,
+    SORT_WLB,
     compute_board,
 )
 
@@ -93,6 +96,18 @@ class PlayerRankDialog(QDialog):
         self.board_combo.currentIndexChanged.connect(lambda _i: self._reload())
         head.addWidget(self.board_combo)
 
+        # Sort mode — Wilson lower bound (default) or composite combat
+        # power. Same for every board — the dialog flips the direction
+        # internally based on whether the board is a "worst" or "best"
+        # board.
+        self.sort_label = QLabel()
+        head.addWidget(self.sort_label)
+        self.sort_combo = QComboBox()
+        for sort in ALL_SORTS:
+            self.sort_combo.addItem("", sort)
+        self.sort_combo.currentIndexChanged.connect(lambda _i: self._reload())
+        head.addWidget(self.sort_combo)
+
         self.min_games_label = QLabel()
         head.addWidget(self.min_games_label)
         self.min_games_spin = QSpinBox()
@@ -127,8 +142,10 @@ class PlayerRankDialog(QDialog):
         self._col_keys = [
             "ui.rank.col_rank", "ui.rank.col_name", "ui.rank.col_games",
             "ui.rank.col_wins", "ui.rank.col_wr", "ui.rank.col_wlb",
+            "ui.rank.col_power",
             "ui.rank.col_kda", "ui.rank.col_hero_dmg",
-            "ui.rank.col_healing",
+            "ui.rank.col_struct", "ui.rank.col_healing",
+            "ui.rank.col_soak", "ui.rank.col_xp",
         ]
         self.table.setColumnCount(len(self._col_keys))
         for i in range(len(self._col_keys)):
@@ -158,6 +175,16 @@ class PlayerRankDialog(QDialog):
                 board, ("ui.rank.board_worst_teammate", QColor(220, 220, 220))
             )
             self.board_combo.setItemText(i, t(key))
+        self.sort_label.setText(t("ui.rank.sort"))
+        sort_keys = {
+            SORT_WLB:   "ui.rank.sort_wlb",
+            SORT_POWER: "ui.rank.sort_power",
+        }
+        for i in range(self.sort_combo.count()):
+            key = sort_keys.get(self.sort_combo.itemData(i), "")
+            if key:
+                self.sort_combo.setItemText(i, t(key))
+        self.sort_combo.setToolTip(t("ui.rank.sort_tip"))
         self.min_games_label.setText(t("ui.aram.min_games"))
         self.limit_label.setText(t("ui.rank.limit_label"))
         self.close_btn.setText(t("ui.aram.close"))
@@ -181,6 +208,7 @@ class PlayerRankDialog(QDialog):
 
     def _reload_inner(self) -> None:
         board = self.board_combo.currentData() or BOARD_WORST_TEAMMATE
+        sort_mode = self.sort_combo.currentData() or SORT_WLB
         min_games = self.min_games_spin.value()
         limit = self.limit_spin.value()
 
@@ -189,6 +217,7 @@ class PlayerRankDialog(QDialog):
             board,
             min_games=min_games,
             limit=limit,
+            sort_mode=sort_mode,
         )
         board_label = self.board_combo.currentText()
         self.summary.setText(
@@ -214,9 +243,13 @@ class PlayerRankDialog(QDialog):
                 str(p.wins),
                 f"{p.win_rate*100:.0f}%",
                 f"{p.wilson_lb*100:.0f}%",
+                f"{p.power:.0f}",
                 f"{p.avg_k:.1f}/{p.avg_d:.1f}/{p.avg_a:.1f}",
                 _fmt_k(p.avg_hero_dmg),
+                _fmt_k(p.avg_structure_dmg),
                 _fmt_k(p.avg_healing),
+                _fmt_k(p.avg_dmg_soaked),
+                _fmt_k(p.avg_xp),
             ]
             for j, txt in enumerate(cells):
                 item = QTableWidgetItem(txt)
