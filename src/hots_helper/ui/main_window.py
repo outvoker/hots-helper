@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QToolButton,
@@ -113,8 +114,21 @@ class MainWindow(QMainWindow):
         set_language(getattr(config, "language", "zh") or "zh")
         self.resize(1000, 700)
 
+        # Wrap the whole layout in a QScrollArea so the window stays
+        # usable on small screens — once the user expands the settings
+        # panel + log box, the content can comfortably exceed 700px and
+        # we'd otherwise clip the bottom (credit row, log textarea).
+        # The scroll area is the QMainWindow's central widget; the real
+        # content lives inside ``central`` and ``root`` below, exactly
+        # like before.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setCentralWidget(scroll)
+
         central = QWidget()
-        self.setCentralWidget(central)
+        scroll.setWidget(central)
         root = QVBoxLayout(central)
         root.setContentsMargins(14, 10, 14, 10)
         root.setSpacing(12)
