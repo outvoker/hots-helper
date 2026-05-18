@@ -122,6 +122,17 @@ def _percentile_in(sorted_pop: list[float], v: float) -> float:
     return bisect_right(sorted_pop, v) / n
 
 
+# Role-contribution thresholds. Mirrors db.store._METRIC_CONTRIB_THRESHOLDS
+# — kept duplicated here so the percentile pipeline doesn't have to
+# import the SQL helper. Update them in tandem if you tune one.
+_SIEGE_THRESHOLD  = 5_000
+_STRUCT_THRESHOLD = 1_000
+_HEAL_THRESHOLD   = 1_000
+_SOAK_THRESHOLD   = 5_000
+_TAKEN_THRESHOLD  = 30_000
+_CC_THRESHOLD     = 1.0
+
+
 @dataclass(frozen=True)
 class PowerBaseline:
     """Pre-sorted samples we use to compute percentile ranks.
@@ -145,6 +156,7 @@ class PowerBaseline:
     structure_damage: list[float]
     healing: list[float]
     damage_soaked: list[float]
+    damage_taken: list[float]
     xp: list[float]
     cc: list[float]
     kda: list[float]                  # per-match KDA = (K+A)/max(D,1)
@@ -154,39 +166,36 @@ class PowerBaseline:
 
 
 def _build_baseline_from_rows(rows) -> PowerBaseline:
-    hero, siege, struct, heal, soak, xp, cc, kda, deaths, wr = (
-        [], [], [], [], [], [], [], [], [], [],
+    hero, siege, struct, heal, soak, taken, xp, cc, kda, deaths, wr = (
+        [], [], [], [], [], [], [], [], [], [], [],
     )
     for r in rows:
         d = max(float(r["deaths"] or 0.0), 1.0)
         kda.append((float(r["kills"] or 0) + float(r["assists"] or 0)) / d)
         hero.append(float(r["hero_damage"] or 0))
-        # Specialist metrics — filter zeros below. Most heroes don't
-        # soak / heal / CC / siege at all (Jaina has 0 soak, Kael has
-        # 0 healing), so leaving zeros in the baseline gives non-
-        # specialists a free percentile of ~0.7 just for being one of
-        # the many zeros at the bottom of the sort. We only learn
-        # something useful from the percentile when comparing real
-        # contributions to other real contributions.
         siege.append(float(r["siege_damage"] or 0))
         struct.append(float(r["structure_damage"] or 0))
         heal.append(float(r["healing"] or 0))
         soak.append(float(r["damage_soaked"] or 0))
+        taken.append(float(r["damage_taken"] or 0))
         xp.append(float(r["xp"] or 0))
         cc.append(float(r["cc"] or 0))
         deaths.append(float(r["deaths"] or 0))
         wr.append(1.0 if int(r["result"] or 0) == 1 else 0.0)
 
-    # Drop zero entries from specialist baselines so non-specialists
-    # naturally bisect to percentile 0 on those metrics (no false
-    # credit) while real specialists rank against each other only.
-    siege  = [v for v in siege  if v > 0]
-    struct = [v for v in struct if v > 0]
-    heal   = [v for v in heal   if v > 0]
-    soak   = [v for v in soak   if v > 0]
-    cc     = [v for v in cc     if v > 0]
+    # Specialist baselines: drop samples that fall below the role
+    # contribution threshold (mirrors store._METRIC_CONTRIB_THRESHOLDS).
+    # A 500-healing self-leech assassin shouldn't be treated as a
+    # healer, and "everyone takes some damage" shouldn't make every
+    # hero's damage_taken percentile useful — only real frontliners.
+    siege  = [v for v in siege  if v > _SIEGE_THRESHOLD]
+    struct = [v for v in struct if v > _STRUCT_THRESHOLD]
+    heal   = [v for v in heal   if v > _HEAL_THRESHOLD]
+    soak   = [v for v in soak   if v > _SOAK_THRESHOLD]
+    taken  = [v for v in taken  if v > _TAKEN_THRESHOLD]
+    cc     = [v for v in cc     if v > _CC_THRESHOLD]
 
-    for lst in (hero, siege, struct, heal, soak, xp, cc, kda, deaths, wr):
+    for lst in (hero, siege, struct, heal, soak, taken, xp, cc, kda, deaths, wr):
         lst.sort()
     base = PowerBaseline(
         hero_damage=hero,
@@ -194,6 +203,7 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
         structure_damage=struct,
         healing=heal,
         damage_soaked=soak,
+        damage_taken=taken,
         xp=xp,
         cc=cc,
         kda=kda,
@@ -209,7 +219,6 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
     # of percentiles" interpretation the user wants.
     raw_pool: list[float] = []
     for r in rows:
-        d = max(float(r["deaths"] or 0.0), 1.0)
         raw_pool.append(_raw_power(
             baseline=base,
             win_rate=1.0 if int(r["result"] or 0) == 1 else 0.0,
@@ -221,6 +230,7 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
             avg_structure_dmg=float(r["structure_damage"] or 0),
             avg_healing=float(r["healing"] or 0),
             avg_dmg_soaked=float(r["damage_soaked"] or 0),
+            avg_dmg_taken=float(r["damage_taken"] or 0),
             avg_xp=float(r["xp"] or 0),
             avg_cc=float(r["cc"] or 0),
         ))
@@ -233,6 +243,7 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
         structure_damage=struct,
         healing=heal,
         damage_soaked=soak,
+        damage_taken=taken,
         xp=xp,
         cc=cc,
         kda=kda,
@@ -257,16 +268,17 @@ def build_power_baseline(store: Store) -> PowerBaseline:
 # Self-healing is excluded — it's mostly inflated by self-sustain
 # heroes' baseline regen and doesn't track player skill well.
 _POWER_WEIGHTS: dict[str, float] = {
-    "win_rate":          0.30,
-    "kda":               0.20,
-    "hero_damage":       0.12,
-    "siege_damage":      0.05,
+    "win_rate":          0.28,
+    "kda":               0.18,
+    "hero_damage":       0.11,
+    "siege_damage":      0.04,
     "structure_damage":  0.04,
     "healing":           0.08,
     "damage_soaked":     0.06,
-    "experience":        0.07,
+    "damage_taken":      0.05,  # frontline pressure (gated by threshold)
+    "experience":        0.06,
     "cc":                0.04,
-    "deaths_inverse":    0.04,  # lower deaths = higher percentile
+    "deaths_inverse":    0.06,  # lower deaths = higher percentile
 }
 
 
@@ -282,18 +294,19 @@ def _raw_power(
     avg_structure_dmg: float,
     avg_healing: float,
     avg_dmg_soaked: float,
+    avg_dmg_taken: float,
     avg_xp: float,
     avg_cc: float,
 ) -> float:
     """Stage 1: weighted-average percentile across the metrics the
     player actually contributed to. 0..100.
 
-    Specialist metrics (soak / heal / siege / struct / cc) only count
-    when the player actually contributed on that axis. If a metric is
-    skipped (value 0), its weight is *redistributed* across the
-    metrics the player did contribute to, so a pure assassin with
-    high damage / KDA can still hit 100 instead of being capped
-    around 73 just for never healing.
+    Specialist metrics (soak / heal / siege / struct / cc / damage_taken)
+    only count when the player actually contributed on that axis at a
+    role-meaningful level. If a metric is skipped, its weight is
+    *redistributed* across the metrics the player did contribute to,
+    so a pure assassin with high damage / KDA can still hit 100
+    instead of being capped just for never healing or tanking.
     """
     kda = (avg_k + avg_a) / max(avg_d, 1.0)
 
@@ -310,20 +323,26 @@ def _raw_power(
          1.0 - _percentile_in(baseline.deaths, avg_d)),
     ]
 
-    # Specialist metrics: include only if the player contributed.
-    if avg_siege_dmg > 0:
+    # Specialist metrics: include only if the player contributed
+    # meaningfully (above the role threshold). The thresholds match
+    # the SQL side so a player whose SQL average is 0 (under-threshold
+    # samples got dropped) also fails the per-call check here.
+    if avg_siege_dmg > _SIEGE_THRESHOLD:
         parts.append((_POWER_WEIGHTS["siege_damage"],
                       _percentile_in(baseline.siege_damage, avg_siege_dmg)))
-    if avg_structure_dmg > 0:
+    if avg_structure_dmg > _STRUCT_THRESHOLD:
         parts.append((_POWER_WEIGHTS["structure_damage"],
                       _percentile_in(baseline.structure_damage, avg_structure_dmg)))
-    if avg_healing > 0:
+    if avg_healing > _HEAL_THRESHOLD:
         parts.append((_POWER_WEIGHTS["healing"],
                       _percentile_in(baseline.healing, avg_healing)))
-    if avg_dmg_soaked > 0:
+    if avg_dmg_soaked > _SOAK_THRESHOLD:
         parts.append((_POWER_WEIGHTS["damage_soaked"],
                       _percentile_in(baseline.damage_soaked, avg_dmg_soaked)))
-    if avg_cc > 0:
+    if avg_dmg_taken > _TAKEN_THRESHOLD:
+        parts.append((_POWER_WEIGHTS["damage_taken"],
+                      _percentile_in(baseline.damage_taken, avg_dmg_taken)))
+    if avg_cc > _CC_THRESHOLD:
         parts.append((_POWER_WEIGHTS["cc"],
                       _percentile_in(baseline.cc, avg_cc)))
 
@@ -345,6 +364,7 @@ def power_score(
     avg_structure_dmg: float,
     avg_healing: float,
     avg_dmg_soaked: float,
+    avg_dmg_taken: float,
     avg_xp: float,
     avg_cc: float,
 ) -> float:
@@ -369,6 +389,7 @@ def power_score(
         avg_structure_dmg=avg_structure_dmg,
         avg_healing=avg_healing,
         avg_dmg_soaked=avg_dmg_soaked,
+        avg_dmg_taken=avg_dmg_taken,
         avg_xp=avg_xp,
         avg_cc=avg_cc,
     )
@@ -395,6 +416,7 @@ def _score_population(
             avg_structure_dmg=r.avg_structure_dmg,
             avg_healing=r.avg_healing,
             avg_dmg_soaked=r.avg_dmg_soaked,
+            avg_dmg_taken=r.avg_dmg_taken,
             avg_xp=r.avg_xp,
             avg_cc=r.avg_cc,
         )

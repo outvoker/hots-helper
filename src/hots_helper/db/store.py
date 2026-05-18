@@ -19,6 +19,58 @@ _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 DEFAULT_MODE_FILTER: tuple[str, ...] = ("Storm League",)
 
 
+# Per-metric "contribution thresholds" applied when averaging stats
+# that are role-specific. Matches below the threshold count as
+# "didn't do this role" and get excluded from the per-player average,
+# so a flex queue's healing average reflects their healing games and
+# not their assassin games. Tuned by feel against real squad data.
+#
+# Why each threshold exists:
+#   healing       — Mal'Ganis / Sonya leech ~500 self-healing baseline
+#                   even on assassin games; > 1000 cuts that noise.
+#   damage_soaked — Abathur / Probius passively rack up small soak
+#                   while no real soaker is present; > 5000 cuts grazes.
+#   structure_dmg — single missed Q on a fort wall = ~500 dmg; > 1000
+#                   filters incidental hits.
+#   siege_damage  — clearing one minion wave = ~3000 dmg; > 5000 means
+#                   "actually pushing".
+#   damage_taken  — every hero takes hits, but only tanks take real
+#                   pressure: > 30000 marks "frontline that round".
+#   cc            — every stun ticks ~0.3-0.5s; > 1.0s = real CC chains
+#                   rather than incidental disruptors.
+_METRIC_CONTRIB_THRESHOLDS: dict[str, int] = {
+    "healing":          1000,
+    "damage_soaked":    5000,
+    "structure_damage": 1000,
+    "siege_damage":     5000,
+    "damage_taken":     30000,
+    "time_cc_enemy_heroes": 1,
+}
+
+
+def _avg_when(metric: str, *, alias: str) -> str:
+    """Build a SQL fragment that averages ``pm.<metric>`` only over
+    matches where the contribution clears the role threshold.
+
+    Returns ``"… AS <alias>"`` so callers drop it straight into a
+    SELECT clause. Outside the threshold table the metric is averaged
+    plainly — most metrics (kills, hero_damage, …) every hero scores
+    on, so threshold gating would just throw away signal.
+    """
+    threshold = _METRIC_CONTRIB_THRESHOLDS.get(metric)
+    if threshold is None:
+        return f"AVG(pm.{metric}) AS {alias}"
+    # NULLIF(..., 0) returns NULL for the no-contribution case; SQLite
+    # then propagates NULL through divide which we coalesce to 0 in
+    # the result-row fetcher.
+    return (
+        f"SUM(CASE WHEN pm.{metric} > {threshold} "
+        f"          THEN pm.{metric} ELSE 0 END) * 1.0 / "
+        f"NULLIF(SUM(CASE WHEN pm.{metric} > {threshold} "
+        f"               THEN 1 ELSE 0 END), 0) AS {alias}"
+    )
+
+
 def _mode_clause(mode_filter: tuple[str, ...] | None, alias: str = "r") -> tuple[str, list[Any]]:
     """Build a ``WHERE``-ready clause + params for filtering by mode.
 
@@ -635,13 +687,13 @@ class Store:
                    AVG(pm.deaths)           AS avg_d,
                    AVG(pm.assists)          AS avg_a,
                    AVG(pm.hero_damage)      AS avg_hero_dmg,
-                   AVG(pm.siege_damage)     AS avg_siege_dmg,
-                   AVG(pm.structure_damage) AS avg_structure_dmg,
-                   AVG(pm.healing)          AS avg_healing,
-                   AVG(pm.damage_taken)     AS avg_dmg_taken,
-                   AVG(pm.damage_soaked)    AS avg_dmg_soaked,
+                   {_avg_when("siege_damage",        alias="avg_siege_dmg")},
+                   {_avg_when("structure_damage",    alias="avg_structure_dmg")},
+                   {_avg_when("healing",             alias="avg_healing")},
+                   {_avg_when("damage_taken",        alias="avg_dmg_taken")},
+                   {_avg_when("damage_soaked",       alias="avg_dmg_soaked")},
                    AVG(pm.experience_contribution) AS avg_xp,
-                   AVG(pm.time_cc_enemy_heroes) AS avg_cc,
+                   {_avg_when("time_cc_enemy_heroes", alias="avg_cc")},
                    MAX(r.played_at)         AS last_seen_at
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
@@ -747,13 +799,13 @@ class Store:
                    AVG(pm.deaths)           AS avg_d,
                    AVG(pm.assists)          AS avg_a,
                    AVG(pm.hero_damage)      AS avg_hero_dmg,
-                   AVG(pm.siege_damage)     AS avg_siege_dmg,
-                   AVG(pm.structure_damage) AS avg_structure_dmg,
-                   AVG(pm.healing)          AS avg_healing,
-                   AVG(pm.damage_taken)     AS avg_dmg_taken,
-                   AVG(pm.damage_soaked)    AS avg_dmg_soaked,
+                   {_avg_when("siege_damage",        alias="avg_siege_dmg")},
+                   {_avg_when("structure_damage",    alias="avg_structure_dmg")},
+                   {_avg_when("healing",             alias="avg_healing")},
+                   {_avg_when("damage_taken",        alias="avg_dmg_taken")},
+                   {_avg_when("damage_soaked",       alias="avg_dmg_soaked")},
                    AVG(pm.experience_contribution) AS avg_xp,
-                   AVG(pm.time_cc_enemy_heroes) AS avg_cc
+                   {_avg_when("time_cc_enemy_heroes", alias="avg_cc")}
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
             WHERE 1=1{clause}

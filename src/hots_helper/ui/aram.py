@@ -286,26 +286,13 @@ class HeroRankingDialog(QDialog):
             map_clause_replays = " AND map_name = ?"
             params_replays.append(map_name)
 
-        rows = self.store.conn.execute(f"""
-            SELECT pm.hero,
-                   COUNT(*) AS games,
-                   SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
-                   AVG(pm.kills)             AS k,
-                   AVG(pm.deaths)            AS d,
-                   AVG(pm.assists)           AS a,
-                   AVG(pm.hero_damage)       AS hd,
-                   AVG(pm.damage_taken)      AS dt,
-                   AVG(pm.healing)           AS hl,
-                   AVG(pm.structure_damage)  AS strd,
-                   AVG(pm.siege_damage)      AS sgd,
-                   AVG(pm.damage_soaked)     AS soak,
-                   AVG(pm.experience_contribution) AS xp,
-                   AVG(pm.time_cc_enemy_heroes) AS cc
-            FROM player_match pm
-            JOIN replays r ON r.id = pm.replay_id
-            WHERE r.mode = ?{map_clause_joined}
-            GROUP BY pm.hero
-        """, tuple(params_joined)).fetchall()
+        # Use the shared hero_aggregate_stats helper so the role-
+        # contribution thresholds (only count "real healing" toward a
+        # healer's healing average, etc.) live in one place.
+        rows = self.store.hero_aggregate_stats(
+            map_name=map_name,
+            mode_filter=(mode,),
+        )
 
         # Build the global per-match baseline once for the power score.
         # Heavy-tailed metrics get percentile-ranked against this so a
@@ -325,12 +312,16 @@ class HeroRankingDialog(QDialog):
                 continue
             wlb = wilson_lower_bound(won, g)
             wr = won / g if g else 0.0
-            avg_k = float(r["k"] or 0); avg_d = float(r["d"] or 0)
-            avg_a = float(r["a"] or 0)
-            avg_hd = float(r["hd"] or 0); avg_strd = float(r["strd"] or 0)
-            avg_sgd = float(r["sgd"] or 0); avg_hl = float(r["hl"] or 0)
-            avg_soak = float(r["soak"] or 0); avg_xp = float(r["xp"] or 0)
-            avg_cc = float(r["cc"] or 0)
+            avg_k = float(r["avg_k"] or 0); avg_d = float(r["avg_d"] or 0)
+            avg_a = float(r["avg_a"] or 0)
+            avg_hd = float(r["avg_hero_dmg"] or 0)
+            avg_strd = float(r["avg_structure_dmg"] or 0)
+            avg_sgd = float(r["avg_siege_dmg"] or 0)
+            avg_hl = float(r["avg_healing"] or 0)
+            avg_dt = float(r["avg_dmg_taken"] or 0)
+            avg_soak = float(r["avg_dmg_soaked"] or 0)
+            avg_xp = float(r["avg_xp"] or 0)
+            avg_cc = float(r["avg_cc"] or 0)
             if baseline is not None:
                 power = power_score(
                     baseline=baseline,
@@ -341,6 +332,7 @@ class HeroRankingDialog(QDialog):
                     avg_structure_dmg=avg_strd,
                     avg_healing=avg_hl,
                     avg_dmg_soaked=avg_soak,
+                    avg_dmg_taken=avg_dt,
                     avg_xp=avg_xp,
                     avg_cc=avg_cc,
                 )
@@ -351,7 +343,7 @@ class HeroRankingDialog(QDialog):
                 "wr": wr, "wlb": wlb,
                 "power": power,
                 "k": avg_k, "d": avg_d, "a": avg_a,
-                "hd": avg_hd, "dt": float(r["dt"] or 0),
+                "hd": avg_hd, "dt": avg_dt,
                 "hl": avg_hl, "strd": avg_strd,
                 "soak": avg_soak,
                 "xp": avg_xp,
