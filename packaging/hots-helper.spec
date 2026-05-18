@@ -158,6 +158,7 @@ hiddenimports = [
     "hots_helper.ui.capture_progress",
     "hots_helper.ui.launcher",
     "hots_helper.ui.hotkey_field",
+    "hots_helper.ui.macos_overlay",
     # PySide6 modules referenced only lazily
     "PySide6.QtCore",
     "PySide6.QtGui",
@@ -191,7 +192,14 @@ if sys.platform == "win32":
         "winrt.windows.foundation.collections",
     ]
 elif sys.platform == "darwin":
-    hiddenimports += ["hots_helper.ocr.vision_macos"]
+    hiddenimports += [
+        "hots_helper.ocr.vision_macos",
+        # AppKit / objc bridge so the launcher + popups can override
+        # NSWindow.collectionBehavior to follow the user into a
+        # fullscreen game's Mission Control space.
+        "AppKit",
+        "objc",
+    ]
 
 # --- Qt binary / data filter ----------------------------------------------
 # Even after excluding the Python sub-modules, PyInstaller's PySide6 hook

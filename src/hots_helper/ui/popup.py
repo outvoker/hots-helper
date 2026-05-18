@@ -57,6 +57,7 @@ from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
 from ..maps import all_maps
 from ..talent_names import talent_label
+from .macos_overlay import make_overlay_floating
 from .theme import (
     BG_DEEP,
     BG_ELEVATED,
@@ -701,6 +702,13 @@ class PopupWindow(QWidget):
         self.resize(1200, 840)
         self._retranslate()
         on_lang_change(lambda _c: self._retranslate())
+
+    def showEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
+        # Stay visible across Mission Control spaces on macOS so the
+        # popup follows the user into a fullscreen game's space
+        # instead of getting stranded behind it.
+        make_overlay_floating(self)
+        super().showEvent(ev)
 
     def _retranslate(self) -> None:
         # Window title and visible header.

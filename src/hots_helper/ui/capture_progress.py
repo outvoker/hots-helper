@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..i18n import t
+from .macos_overlay import make_overlay_floating
 from .theme import (
     BG_DEEP,
     BG_ELEVATED,
@@ -207,6 +208,10 @@ class CaptureProgressDialog(QWidget):
         self.move(geo.topLeft())
         self.setWindowOpacity(0.0)
         self.show()
+        # Make the dialog follow the user across mac Mission Control
+        # spaces — without this the progress card vanishes the moment
+        # HotS' fullscreen space is foregrounded after the screenshot.
+        make_overlay_floating(self)
         self._fade.stop()
         self._fade.setStartValue(0.0)
         self._fade.setEndValue(1.0)

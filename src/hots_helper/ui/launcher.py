@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 from ..config import Config
 from ..i18n import on_change as on_lang_change, t
 from .assets import app_icon
+from .macos_overlay import make_overlay_floating
 from .theme import (
     BG_DEEP,
     BG_ELEVATED,
@@ -271,6 +272,15 @@ class FloatingLauncher(QWidget):
                 # otherwise emit at the end of a drag.
                 return True
         return super().eventFilter(obj, ev)
+
+    # --- show/hide hooks ----------------------------------------------------
+
+    def showEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
+        # On macOS, fullscreen games run in their own Mission Control
+        # space; without ``canJoinAllSpaces`` the chip vanishes the
+        # moment the user switches into the game's space.
+        make_overlay_floating(self)
+        super().showEvent(ev)
 
     # --- enter/leave keep expanded mode alive ------------------------------
 

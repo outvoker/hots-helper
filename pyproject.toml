@@ -16,6 +16,11 @@ dependencies = [
     "pillow>=10.0.0",
     "numpy>=2.4.4",
     "pyobjc-framework-vision>=12.1 ; sys_platform == 'darwin'",
+    # AppKit access so we can set NSWindow collectionBehavior on our
+    # floating widgets — without it, the launcher / popups disappear
+    # when HotS goes fullscreen because mac puts a fullscreen app in
+    # its own Mission Control space.
+    "pyobjc-framework-cocoa>=10.0 ; sys_platform == 'darwin'",
     "winrt-runtime>=2.0.0 ; sys_platform == 'win32'",
     "winrt-Windows.Media.Ocr>=2.0.0 ; sys_platform == 'win32'",
     "winrt-Windows.Graphics.Imaging>=2.0.0 ; sys_platform == 'win32'",

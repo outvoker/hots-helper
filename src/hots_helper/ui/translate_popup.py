@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from ..i18n import t
 from ..translate import SUPPORTED_LANGS
+from .macos_overlay import make_overlay_floating
 from .theme import (
     BG_DEEP,
     BG_ELEVATED,
@@ -162,6 +163,12 @@ class ChatTranslationPopup(QWidget):
 
         self._drag_pos = None
         self._retranslate()
+
+    def showEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
+        # Follow the user into a fullscreen game's Mission Control
+        # space on macOS — see :mod:`.macos_overlay`.
+        make_overlay_floating(self)
+        super().showEvent(ev)
 
     def _retranslate(self) -> None:
         self.title_label.setText(t("ui.chat_trans.title"))
@@ -553,6 +560,12 @@ class ComposeTranslatePopup(QWidget):
         self._thread: QThread | None = None
         self._worker: ComposeTranslateWorker | None = None
         self._retranslate()
+
+    def showEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
+        # Follow the user into a fullscreen game's Mission Control
+        # space on macOS — see :mod:`.macos_overlay`.
+        make_overlay_floating(self)
+        super().showEvent(ev)
 
     def _retranslate(self) -> None:
         self.title_label.setText(t("ui.compose_trans.title"))
