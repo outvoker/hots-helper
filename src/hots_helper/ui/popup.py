@@ -992,6 +992,12 @@ class PopupWindow(QWidget):
         return handles
 
     def _run_analysis(self) -> None:
+        # Drop any lingering read snapshot so we observe whatever the
+        # watcher / cloud-sync threads have committed since the last
+        # popup pass. Without this, a replay ingested between two
+        # consecutive hotkey presses isn't reflected in the per-player
+        # cards or BP recommendations until the app is restarted.
+        self.store.drop_read_snapshot()
         map_name = self.map_edit.currentText().strip() or None
         ally_names = [c.name for c in self._ally_cards]
         enemy_names = [c.name for c in self._enemy_cards]
@@ -1049,6 +1055,9 @@ class PopupWindow(QWidget):
             card.clear()
             self._run_analysis()  # picks/bans may change when a slot clears
             return
+        # Same stale-snapshot concern as _run_analysis: a fresh ingest
+        # may have happened on the watcher thread since the last query.
+        self.store.drop_read_snapshot()
         map_name = self.map_edit.currentText().strip() or None
         summaries = (
             lookup_players(self.store, [name], map_name=map_name)

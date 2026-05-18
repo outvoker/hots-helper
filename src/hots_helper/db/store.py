@@ -109,6 +109,34 @@ class Store:
     def close(self) -> None:
         self.conn.close()
 
+    def drop_read_snapshot(self) -> None:
+        """End any pending implicit read transaction.
+
+        Python's sqlite3 module starts an implicit transaction on the
+        first ``SELECT`` and holds the read snapshot until the next
+        ``commit()`` or ``rollback()``. When another thread (the
+        watcher / cloud sync) writes new rows on the *same* connection
+        in between, the holder of the open read txn keeps seeing the
+        old snapshot until it commits. Call this at every read
+        "session boundary" — e.g. when the BP popup runs a fresh
+        analysis pass — so the next ``SELECT`` sees the latest
+        committed data.
+
+        Cheap on a clean connection (just a COMMIT-with-no-changes), so
+        the popup can call it unconditionally per refresh.
+        """
+        with self._lock:
+            try:
+                self.conn.commit()
+            except Exception:
+                # Best-effort — if the connection is mid-transaction
+                # in some unusual state, rollback restores us to a
+                # known-good snapshot for the next read.
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+
     def __enter__(self) -> "Store":
         return self
 
