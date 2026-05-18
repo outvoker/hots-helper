@@ -96,6 +96,9 @@ datas = [
     # UI asset bundle: icon.svg + multi-res PNG/ICO/ICNS used at runtime
     # by hots_helper.ui.assets.app_icon().
     (str(project_root / "src" / "hots_helper" / "ui" / "assets"), "hots_helper/ui/assets"),
+    # Extra OCR rec models we ship next to the rapidocr-onnxruntime
+    # bundled CN+EN model, so we cover Korean / Japanese names too.
+    (str(project_root / "src" / "hots_helper" / "ocr" / "models"), "hots_helper/ocr/models"),
 ]
 
 # RapidOCR ships its ONNX models + config alongside the package. Without

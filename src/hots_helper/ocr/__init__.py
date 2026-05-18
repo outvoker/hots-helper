@@ -1,19 +1,21 @@
-"""OCR backend selection.
+"""OCR entry point.
 
-Default: RapidOCR (rapidocr-onnxruntime). Cross-platform Python wheel,
-includes its model weights, recognizes CN/EN/JP/KR with high accuracy on
-stylized game UI text. This is the only backend we ship to end users.
+Single backend: RapidOCR (``rapidocr-onnxruntime``). Cross-platform
+Python wheel, ships its CN+EN model weights inside the wheel, and we
+ship two extra ONNX models alongside it (``ocr/models/``) so the same
+pipeline reads Korean and Japanese text too. See
+:mod:`hots_helper.ocr.rapid` for the multi-language implementation.
 
-System OCR (Vision on macOS, Windows.Media.Ocr on Windows) is kept as a
-fallback for environments where RapidOCR can't be installed (e.g. an
-extremely locked-down corporate machine). Disabled by default — set
-``HOTS_HELPER_OCR_BACKEND=system`` to opt in.
+We deliberately don't fall back to system OCR (Vision on macOS,
+Windows.Media.Ocr on Windows). Mixing engines per environment leads
+to silently different recognition quality across squad members'
+machines and made the BP popup show "missing data" reports that turned
+out to be platform-dependent OCR misses. Sticking to one backend
+keeps behaviour reproducible.
 """
 
 from __future__ import annotations
 
-import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,68 +31,13 @@ class OcrBlock:
     confidence: float
 
 
-def _system_recognize(image_path: Path,
-                      progress: ProgressCallback) -> list[OcrBlock]:
-    if sys.platform == "darwin":
-        try:
-            from .vision_macos import recognize as _r
-            return _r(image_path)
-        except Exception:
-            return []
-    if sys.platform == "win32":
-        try:
-            from .winrt_ocr import recognize as _r
-            return _r(image_path, progress=progress)
-        except Exception:
-            return []
-    return []
-
-
 def recognize(image_path: Path,
               progress: ProgressCallback = None) -> list[OcrBlock]:
-    """Run the best available OCR backend on ``image_path``.
-
-    Backend selection order:
-
-    1. macOS / Windows system OCR ("vision" / "winrt"). They both
-       handle Korean and Japanese natively when the language packs are
-       installed (Vision: always; WinRT: per-user-installed packs).
-    2. RapidOCR (PP-OCRv4 Chinese-English model) as fallback. RapidOCR
-       does *not* recognize Hangul or Hiragana/Katakana — its bundled
-       model is CN+EN only. Returning low-confidence garbage for
-       Korean glyphs is worse than admitting we couldn't read them.
-
-    The previous order was rapid → system, which caused KR / JP names
-    to come out as random Chinese characters or empty strings on Mac
-    (where Vision would have nailed them).
-
-    ``HOTS_HELPER_OCR_BACKEND`` env var still overrides:
-    * ``system``  — only system OCR, never rapid
-    * ``rapid``   — only rapid, never system
-    * ``auto`` (default) — system first, rapid fallback
-    """
-    backend = os.environ.get("HOTS_HELPER_OCR_BACKEND", "auto").lower()
-
-    if backend == "rapid":
-        # Forced rapid path (mostly for debugging — gives consistent
-        # output across machines regardless of locale settings).
-        try:
-            from .rapid import recognize as _r
-            return _r(image_path, progress=progress)
-        except ImportError:
-            return _system_recognize(image_path, progress)
-
-    if backend == "system":
-        return _system_recognize(image_path, progress)
-
-    # Default: system first (better multi-language coverage), rapid fallback.
-    blocks = _system_recognize(image_path, progress)
-    if blocks:
-        return blocks
-    if progress is not None:
-        progress("system OCR returned no blocks; falling back to RapidOCR")
+    """Run RapidOCR on ``image_path`` and return text blocks."""
     try:
         from .rapid import recognize as _r
-        return _r(image_path, progress=progress)
-    except ImportError:
+    except ImportError as e:
+        if progress is not None:
+            progress(f"rapidocr-onnxruntime not installed: {e}")
         return []
+    return _r(image_path, progress=progress)

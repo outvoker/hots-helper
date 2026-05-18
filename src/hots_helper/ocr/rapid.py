@@ -1,24 +1,29 @@
-"""RapidOCR backend (PaddleOCR ported to ONNX Runtime).
+"""RapidOCR backend (PaddleOCR ported to ONNX Runtime), multi-language.
 
-Cross-platform, pure Python wheels, no system dependencies. Bundles around
-12 MB of model weights, included in the wheel — works the same on Windows,
-macOS, and Linux. Recognizes Chinese / English / Japanese / Korean from a
-single model.
+Cross-platform, pure Python wheels, no system dependencies. Bundles three
+recognition models so we cover Chinese / English / Korean / Japanese
+glyphs from the same pipeline, regardless of what language packs the
+end user has installed at the OS level:
 
-Why we use this instead of system OCR:
-- Windows.Media.Ocr fails on the stylized HotS draft UI: the engine treats
-  the colored hex glow + half-transparent name strips as "not text" and
-  silently returns no blocks for player names.
-- macOS Vision works but is platform-locked.
+* ``ch_PP-OCRv4_rec_infer.onnx``     — bundled with rapidocr-onnxruntime;
+                                       Chinese characters + Latin alphabet.
+* ``korean_mobile_v2.0_rec_infer.onnx`` — committed to ``ocr/models/``;
+                                          Hangul + Latin (~3 MB).
+* ``japan_rec_crnn.onnx``            — committed to ``ocr/models/``;
+                                       Hiragana + Katakana + Kanji + Latin
+                                       (~3 MB, fixed input height 32).
 
-RapidOCR's CRNN model handles game UI text reliably and ports cleanly into
-PyInstaller bundles without code-signing complications.
+Each detected text box gets passed through every recognition model.
+The variant that returns the highest confidence wins for that box —
+Korean glyphs come out as garbage (low confidence) from the Chinese
+model and as the right text (high confidence) from the Korean model.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -28,9 +33,40 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[str], None]]
 
-# Module-level singleton: building the OCR engine triggers ONNX Runtime model
-# load + JIT, ~1s on a cold start. Reusing keeps subsequent screenshots fast.
-_engine = None
+_MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+# Lazy-initialised singletons keyed by language tag. Building each engine
+# costs ~0.5–1 s on a cold start; reuse keeps subsequent screenshots fast.
+_engines: dict[str, "object | None"] = {}
+
+
+@dataclass(frozen=True)
+class _LangSpec:
+    tag: str
+    rec_model_path: Path | None  # None = use rapidocr's bundled default
+    rec_img_shape: tuple[int, int, int] | None  # None = use rapidocr's default
+
+
+# Order matters only for log messages — confidence merge is order-independent.
+_LANGS: tuple[_LangSpec, ...] = (
+    # Bundled CN+EN model. Path stays None so rapidocr resolves its own
+    # default at engine-init time (the .onnx ships inside the wheel).
+    _LangSpec(tag="cn+en", rec_model_path=None, rec_img_shape=None),
+    _LangSpec(
+        tag="korean",
+        rec_model_path=_MODELS_DIR / "korean_mobile_v2.0_rec_infer.onnx",
+        # PP-OCRv1 Korean model accepts the default 48-tall input fine.
+        rec_img_shape=None,
+    ),
+    _LangSpec(
+        tag="japanese",
+        rec_model_path=_MODELS_DIR / "japan_rec_crnn.onnx",
+        # The Japanese CRNN model has a fixed input height of 32 rather
+        # than the 48 PP-OCRv4 expects — pass the right shape so
+        # rapidocr's normaliser doesn't squash the glyphs.
+        rec_img_shape=(3, 32, 320),
+    ),
+)
 
 
 def _emit(progress: ProgressCallback, msg: str) -> None:
@@ -42,66 +78,117 @@ def _emit(progress: ProgressCallback, msg: str) -> None:
             pass
 
 
-def _get_engine():
-    global _engine
-    if _engine is None:
-        from rapidocr_onnxruntime import RapidOCR
+def _get_engine(spec: _LangSpec):
+    """Return a cached RapidOCR engine for the given language spec."""
+    cached = _engines.get(spec.tag)
+    if cached is not None:
+        return cached
+    from rapidocr_onnxruntime import RapidOCR
 
-        _engine = RapidOCR()
-    return _engine
+    kwargs: dict = {}
+    if spec.rec_model_path is not None:
+        if not spec.rec_model_path.is_file():
+            raise FileNotFoundError(
+                f"missing OCR model {spec.rec_model_path}"
+            )
+        kwargs["rec_model_path"] = str(spec.rec_model_path)
+    if spec.rec_img_shape is not None:
+        kwargs["rec_img_shape"] = list(spec.rec_img_shape)
+    engine = RapidOCR(**kwargs)
+    _engines[spec.tag] = engine
+    return engine
 
 
-def recognize(image_path: Path,
-              progress: ProgressCallback = None) -> list[OcrBlock]:
-    t0 = time.monotonic()
-    _emit(progress, "loading RapidOCR engine…")
-    try:
-        engine = _get_engine()
-    except ImportError as e:
-        _emit(progress, f"rapidocr-onnxruntime not installed: {e}")
-        return []
-    except Exception as e:
-        _emit(progress, f"engine init failed: {type(e).__name__}: {e}")
-        return []
-    _emit(progress, f"engine ready ({time.monotonic() - t0:.2f}s)")
+# --- bbox helpers ---------------------------------------------------------
 
-    # RapidOCR accepts file paths, byte arrays, or numpy arrays. Pass the
-    # path; it handles JPEG/PNG decoding internally with OpenCV.
-    t1 = time.monotonic()
-    _emit(progress, f"running OCR on {image_path.name}…")
+
+def _box_iou(a: tuple[float, float, float, float],
+             b: tuple[float, float, float, float]) -> float:
+    """Intersection-over-union for normalised (x0, y0, x1, y1) boxes."""
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    ix0 = max(ax0, bx0)
+    iy0 = max(ay0, by0)
+    ix1 = min(ax1, bx1)
+    iy1 = min(ay1, by1)
+    iw = max(0.0, ix1 - ix0)
+    ih = max(0.0, iy1 - iy0)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, (ax1 - ax0)) * max(0.0, (ay1 - ay0))
+    area_b = max(0.0, (bx1 - bx0)) * max(0.0, (by1 - by0))
+    union = area_a + area_b - inter
+    if union <= 0:
+        return 0.0
+    return inter / union
+
+
+def _merge_blocks(passes: list[list[OcrBlock]],
+                  iou_threshold: float = 0.4,
+                  unique_confidence_floor: float = 0.7) -> list[OcrBlock]:
+    """Combine recognition results from multiple language passes.
+
+    Each detected text region appears once per language pass at roughly
+    the same bbox; pick the language whose recognizer was most
+    confident. Blocks that *only* appear in one pass and never overlap
+    with anything from another pass are kept only if their confidence
+    is above ``unique_confidence_floor`` — these are usually
+    hallucinations the JP/KR mobile models produce on textured
+    background where the CN+EN model correctly detected nothing.
+    """
+    # First merge: track every overlapping family.
+    merged: list[OcrBlock] = []
+    overlap_count: list[int] = []  # parallel to merged
+    for pass_blocks in passes:
+        for cand in pass_blocks:
+            best_existing_idx = -1
+            best_iou = 0.0
+            for i, kept in enumerate(merged):
+                iou = _box_iou(cand.bbox, kept.bbox)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_existing_idx = i
+            if best_iou >= iou_threshold and best_existing_idx >= 0:
+                overlap_count[best_existing_idx] += 1
+                if cand.confidence > merged[best_existing_idx].confidence:
+                    merged[best_existing_idx] = cand
+            else:
+                merged.append(cand)
+                overlap_count.append(1)
+
+    # Second pass: drop solitary low-confidence blocks. A real text
+    # region almost always gets detected by the shared det model and
+    # rec'd by at least the CN+EN pass, so genuine text has
+    # overlap_count >= 2 (often 3). Solitary blocks under the floor
+    # are the JP/KR mobile models seeing patterns in noise.
+    final: list[OcrBlock] = []
+    for block, n in zip(merged, overlap_count):
+        if n == 1 and block.confidence < unique_confidence_floor:
+            continue
+        final.append(block)
+    return final
+
+
+# --- one-language pass ----------------------------------------------------
+
+
+def _run_pass(
+    engine,
+    image_path: Path,
+    img_w: float,
+    img_h: float,
+) -> list[OcrBlock]:
     try:
         result, _elapse = engine(str(image_path))
     except Exception as e:
-        _emit(progress, f"OCR call failed: {type(e).__name__}: {e}")
-        logger.exception("RapidOCR call failed")
+        logger.exception("RapidOCR call failed: %s", e)
         return []
-    _emit(progress, f"OCR returned {len(result or [])} block(s) in "
-                    f"{time.monotonic() - t1:.2f}s")
-
     if not result:
         return []
-
-    # Resolve image dimensions for normalization. OpenCV decodes inside
-    # RapidOCR but doesn't expose the size, so do a cheap PIL stat.
-    try:
-        from PIL import Image
-        with Image.open(image_path) as im:
-            img_w, img_h = im.size
-    except Exception as e:
-        _emit(progress, f"PIL stat failed: {e} — using bbox extents as size")
-        # Fall back to using the union of all detected boxes as the image
-        # bounds. Slightly less accurate but still usable.
-        all_xs, all_ys = [], []
-        for box, _text, _conf in result:
-            all_xs.extend(p[0] for p in box)
-            all_ys.extend(p[1] for p in box)
-        img_w = max(all_xs) if all_xs else 1.0
-        img_h = max(all_ys) if all_ys else 1.0
-
     blocks: list[OcrBlock] = []
     for entry in result:
         box, text, conf = entry
-        # box is a list of 4 (x, y) corner points (clockwise from top-left).
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
         x0 = min(xs); x1 = max(xs)
@@ -117,3 +204,55 @@ def recognize(image_path: Path,
             )
         )
     return blocks
+
+
+# --- public API -----------------------------------------------------------
+
+
+def recognize(image_path: Path,
+              progress: ProgressCallback = None) -> list[OcrBlock]:
+    t0 = time.monotonic()
+    _emit(progress, "loading RapidOCR engines…")
+
+    # Resolve image dimensions once so every pass produces normalised bboxes.
+    img_w: float
+    img_h: float
+    try:
+        from PIL import Image
+        with Image.open(image_path) as im:
+            img_w, img_h = float(im.size[0]), float(im.size[1])
+    except Exception as e:
+        _emit(progress, f"image stat failed: {e}")
+        return []
+
+    passes: list[list[OcrBlock]] = []
+    for spec in _LANGS:
+        try:
+            engine = _get_engine(spec)
+        except FileNotFoundError as e:
+            _emit(progress, f"  [{spec.tag}] model missing — skipping ({e})")
+            continue
+        except Exception as e:
+            _emit(progress, f"  [{spec.tag}] init failed: {type(e).__name__}: {e}")
+            continue
+        t1 = time.monotonic()
+        _emit(progress, f"  [{spec.tag}] running OCR pass…")
+        blocks = _run_pass(engine, image_path, img_w, img_h)
+        passes.append(blocks)
+        _emit(
+            progress,
+            f"  [{spec.tag}] {len(blocks)} block(s) "
+            f"in {time.monotonic() - t1:.2f}s",
+        )
+
+    if not passes:
+        _emit(progress, "no OCR engines available — returning empty result")
+        return []
+
+    merged = _merge_blocks(passes)
+    _emit(
+        progress,
+        f"OCR done — {len(merged)} block(s) merged from {len(passes)} pass(es) "
+        f"in {time.monotonic() - t0:.2f}s",
+    )
+    return merged
