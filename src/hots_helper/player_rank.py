@@ -487,13 +487,16 @@ def compute_player_rankings(
     limit: int = 500,
     baseline: PowerBaseline | None = None,
 ) -> list[PlayerRankRow]:
-    """Return every player who has shared a match with the squad.
+    """Return players who have shared a match with the squad.
 
-    Rows come back in arbitrary order — the caller (the dialog or the
-    BP popup) decides the sort, since the table headers are now
-    click-to-sort and the BP highlight is "is this player anywhere
-    in the top/bottom by power?". ``rank`` is filled in the order
-    the SQL returns rows; the dialog overrides it after sorting.
+    Pulls *all* matching rows from the DB, scores them in Python,
+    then sorts by power descending and slices to ``limit``. The SQL
+    side used to ``ORDER BY games DESC LIMIT n``, which guaranteed
+    the squad always made the cut (they have the most games by far)
+    even when the user wanted a small slice — so a "show me the top
+    20" ended up being "the 5 squad members + 15 randoms". By
+    filtering on power instead, the squad only appears in the slice
+    when they actually score among the top N.
     """
     squad = tuple(store.squad_handles())
     if not squad:
@@ -502,11 +505,21 @@ def compute_player_rankings(
     rows = store.player_rankings_seen(
         squad,
         min_games=min_games,
-        limit=limit,
+        # SQL limit acts as a sanity cap, not the user-facing slice;
+        # we still need every candidate available to Python so the
+        # power-sort can pick the real top N.
+        limit=10_000,
     )
     if not rows:
         return []
     if baseline is None:
         baseline = build_power_baseline(store)
-    scored = [_row_to_rank(r, rank=i + 1) for i, r in enumerate(rows)]
-    return _score_population(scored, baseline)
+    scored = [_row_to_rank(r, rank=0) for r in rows]
+    scored = _score_population(scored, baseline)
+    scored.sort(key=lambda p: -p.power)
+    scored = scored[:limit]
+    # Renumber ranks now that we're in power order.
+    return [
+        PlayerRankRow(**{**p.__dict__, "rank": i + 1})
+        for i, p in enumerate(scored)
+    ]
