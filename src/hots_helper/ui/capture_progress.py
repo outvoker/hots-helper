@@ -49,9 +49,12 @@ from .theme import (
 )
 
 
-# Step copy keys — one i18n key per stage. The worker takes ~1.5–3 s
-# total, so we want roughly 4–6 messages spaced ~400ms apart.
-_STEP_KEYS = (
+# Step scripts per flow — one i18n key per stage. The worker takes
+# ~1.5–3 s total, so we want roughly 4–6 messages spaced ~420ms apart.
+# ``flow="bp"`` is the original BP-intelligence script; ``flow="chat"``
+# is the chat-translate flow. Pick a script per ``start()`` call so a
+# Ctrl+Shift+T capture doesn't read "scoring BP candidates" copy.
+_BP_STEP_KEYS = (
     "ui.capture.step_capture",
     "ui.capture.step_ocr",
     "ui.capture.step_parse",
@@ -59,6 +62,24 @@ _STEP_KEYS = (
     "ui.capture.step_score",
     "ui.capture.step_render",
 )
+
+_CHAT_STEP_KEYS = (
+    "ui.capture.chat_step_capture",
+    "ui.capture.chat_step_ocr",
+    "ui.capture.chat_step_filter",
+    "ui.capture.chat_step_translate",
+    "ui.capture.chat_step_render",
+)
+
+_TITLE_KEYS = {
+    "bp": "ui.capture.title",
+    "chat": "ui.capture.chat_title",
+}
+
+_STEP_SCRIPTS = {
+    "bp": _BP_STEP_KEYS,
+    "chat": _CHAT_STEP_KEYS,
+}
 
 
 class CaptureProgressDialog(QWidget):
@@ -93,15 +114,21 @@ class CaptureProgressDialog(QWidget):
         spinner = QLabel("⚡")
         spinner.setStyleSheet(f"color: {GOLD_BRIGHT}; font-size: 20pt;")
         title_row.addWidget(spinner)
-        title = QLabel(t("ui.capture.title"))
-        title.setStyleSheet(
+        # Title text is filled in by ``start(flow=…)`` so the same dialog
+        # can headline either "BP 智能分析" or "公屏聊天翻译".
+        self._title_label = QLabel()
+        self._title_label.setStyleSheet(
             f"color: {GOLD}; font-size: 14pt; font-weight: 700;"
             f" letter-spacing: 0.5px;"
         )
-        title_row.addWidget(title, 1)
+        title_row.addWidget(self._title_label, 1)
         outer.addLayout(title_row)
 
-        self._step_label = QLabel(t(_STEP_KEYS[0]))
+        # Active step script — one of _STEP_SCRIPTS values. Filled in on
+        # ``start(flow=…)`` before the timer fires. Default to the BP
+        # script so ``__init__`` doesn't blow up on first paint.
+        self._step_keys: tuple[str, ...] = _BP_STEP_KEYS
+        self._step_label = QLabel(t(self._step_keys[0]))
         self._step_label.setStyleSheet(
             f"color: {TEXT}; font-size: 11pt; padding: 2px 0;"
         )
@@ -148,11 +175,26 @@ class CaptureProgressDialog(QWidget):
 
     # --- public API ---------------------------------------------------------
 
-    def start(self, anchor: QWidget | None = None) -> None:
+    def start(
+        self,
+        anchor: QWidget | None = None,
+        *,
+        flow: str = "bp",
+    ) -> None:
         """Show the dialog, centered above ``anchor`` (the main window)
-        or on the primary screen if no anchor is given."""
+        or on the primary screen if no anchor is given.
+
+        ``flow`` selects which step script + title to use. ``"bp"``
+        (default) for the BP-intelligence pipeline, ``"chat"`` for the
+        chat-OCR + translate pipeline. Adding more flows = add a key to
+        :data:`_STEP_SCRIPTS` and :data:`_TITLE_KEYS`.
+        """
+        self._step_keys = _STEP_SCRIPTS.get(flow, _BP_STEP_KEYS)
+        self._title_label.setText(
+            t(_TITLE_KEYS.get(flow, "ui.capture.title"))
+        )
         self._step_index = 0
-        self._step_label.setText(t(_STEP_KEYS[0]))
+        self._step_label.setText(t(self._step_keys[0]))
         self._sub_label.setText(t("ui.capture.sub_first"))
         self._bar.setRange(0, 0)
         if anchor is not None:
@@ -207,5 +249,5 @@ class CaptureProgressDialog(QWidget):
         # Move forward, pin at the last step (we keep showing it until
         # the worker actually finishes — feels worse to flap back to
         # an earlier message than to linger on the last one).
-        self._step_index = min(self._step_index + 1, len(_STEP_KEYS) - 1)
-        self._step_label.setText(t(_STEP_KEYS[self._step_index]))
+        self._step_index = min(self._step_index + 1, len(self._step_keys) - 1)
+        self._step_label.setText(t(self._step_keys[self._step_index]))

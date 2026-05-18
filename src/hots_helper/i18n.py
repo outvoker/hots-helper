@@ -49,6 +49,13 @@ _translations: dict[str, dict[str, str]] = {
     "ui.main.hotkey_section": {"zh": "对局开始前快捷键", "en": "Pre-game scout hotkey"},
     "ui.main.shortcut": {"zh": "快捷键：", "en": "Shortcut:"},
     "ui.main.apply": {"zh": "应用", "en": "Apply"},
+    # Used by the HotkeyField widget for its inline edit / save / cancel
+    # affordance. Display by default; enters recording mode only when
+    # the user explicitly clicks 编辑.
+    "ui.hotkey.edit": {"zh": "编辑", "en": "Edit"},
+    "ui.hotkey.save": {"zh": "保存", "en": "Save"},
+    "ui.hotkey.cancel": {"zh": "取消", "en": "Cancel"},
+    "ui.hotkey.unset": {"zh": "未设置", "en": "not set"},
     "ui.main.test_popup": {"zh": "测试弹窗", "en": "Test popup"},
 
     # Primary feature cards on the main window.
@@ -178,6 +185,32 @@ _translations: dict[str, dict[str, str]] = {
     "ui.capture.failed": {
         "zh": "分析失败，请查看运行日志。",
         "en": "Capture failed — see Activity log.",
+    },
+
+    # Chat-translate flow shares the same dialog but gets its own copy.
+    "ui.capture.chat_title": {
+        "zh": "公屏聊天翻译进行中…",
+        "en": "Translating in-game chat…",
+    },
+    "ui.capture.chat_step_capture": {
+        "zh": "正在截取全屏画面…",
+        "en": "Capturing fullscreen frame…",
+    },
+    "ui.capture.chat_step_ocr": {
+        "zh": "调用系统 OCR 引擎识别屏幕文字…",
+        "en": "Running system OCR over the screen…",
+    },
+    "ui.capture.chat_step_filter": {
+        "zh": "在聊天面板区域筛选有效消息…",
+        "en": "Filtering messages out of the chat region…",
+    },
+    "ui.capture.chat_step_translate": {
+        "zh": "通过队伍服务器中转 · 火山翻译引擎处理多语言…",
+        "en": "Routing via squad server · multilingual MT in flight…",
+    },
+    "ui.capture.chat_step_render": {
+        "zh": "汇总译文准备展示…",
+        "en": "Aggregating translations…",
     },
 
     "ui.main.tools": {"zh": "英雄强度榜", "en": "Hero ranking"},

@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -37,6 +36,7 @@ from ..sync_defaults import DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL
 from ..watcher.ingest import IngestResult
 from .capture_progress import CaptureProgressDialog
 from .hotkey import HotkeyManager
+from .hotkey_field import HotkeyField
 from .popup import PopupWindow
 from .translate_popup import ChatTranslationPopup, ComposeTranslatePopup
 from .theme import (
@@ -262,35 +262,34 @@ class MainWindow(QMainWindow):
         sp.addWidget(self.sync_box)
 
         # --- Translation hotkeys section --------------------------------
-        # Two extra hotkeys for the chat-OCR + compose-translate flows.
-        # Both show their pynput strings (e.g. "<ctrl>+<shift>+t") in
-        # plain QKeySequenceEdit widgets; the same conversion helpers
-        # the BP hotkey uses apply.
+        # Each hotkey is a HotkeyField (display + 编辑 button). Only
+        # actively recording mode captures keystrokes — clicking
+        # somewhere else on the window won't accidentally rewrite a
+        # saved shortcut.
         self.trans_box = QGroupBox()
         tb = QVBoxLayout(self.trans_box)
         chat_row = QHBoxLayout()
         self.chat_hk_label = QLabel()
         chat_row.addWidget(self.chat_hk_label)
-        self.chat_hk_edit = QKeySequenceEdit()
-        self.chat_hk_edit.setKeySequence(
-            _pynput_to_qt_seq(self.config.chat_translate_hotkey)
+        self.chat_hk_field = HotkeyField(
+            self.config.chat_translate_hotkey,
+            qt_from_pynput=_pynput_to_qt_seq,
+            pynput_from_qt=_qt_seq_to_pynput,
         )
-        chat_row.addWidget(self.chat_hk_edit, 1)
-        self.chat_hk_apply = QPushButton()
-        self.chat_hk_apply.clicked.connect(self._apply_chat_translate_hotkey)
-        chat_row.addWidget(self.chat_hk_apply)
+        self.chat_hk_field.saved.connect(self._save_chat_translate_hotkey)
+        chat_row.addWidget(self.chat_hk_field, 1)
         tb.addLayout(chat_row)
+
         compose_row = QHBoxLayout()
         self.compose_hk_label = QLabel()
         compose_row.addWidget(self.compose_hk_label)
-        self.compose_hk_edit = QKeySequenceEdit()
-        self.compose_hk_edit.setKeySequence(
-            _pynput_to_qt_seq(self.config.compose_translate_hotkey)
+        self.compose_hk_field = HotkeyField(
+            self.config.compose_translate_hotkey,
+            qt_from_pynput=_pynput_to_qt_seq,
+            pynput_from_qt=_qt_seq_to_pynput,
         )
-        compose_row.addWidget(self.compose_hk_edit, 1)
-        self.compose_hk_apply = QPushButton()
-        self.compose_hk_apply.clicked.connect(self._apply_compose_translate_hotkey)
-        compose_row.addWidget(self.compose_hk_apply)
+        self.compose_hk_field.saved.connect(self._save_compose_translate_hotkey)
+        compose_row.addWidget(self.compose_hk_field, 1)
         tb.addLayout(compose_row)
         sp.addWidget(self.trans_box)
 
@@ -458,16 +457,18 @@ class MainWindow(QMainWindow):
         head.addLayout(title_box, 1)
         v.addLayout(head)
 
-        # Hotkey row.
+        # Hotkey row — gated edit so accidental keystrokes elsewhere
+        # on the window don't rewrite the saved combo.
         hk_row = QHBoxLayout()
         self.shortcut_label = QLabel()
         hk_row.addWidget(self.shortcut_label)
-        self.hotkey_edit = QKeySequenceEdit()
-        self.hotkey_edit.setKeySequence(_pynput_to_qt_seq(self.config.hotkey))
-        hk_row.addWidget(self.hotkey_edit, 1)
-        self.apply_btn = QPushButton()
-        self.apply_btn.clicked.connect(self._apply_hotkey)
-        hk_row.addWidget(self.apply_btn)
+        self.hotkey_field = HotkeyField(
+            self.config.hotkey,
+            qt_from_pynput=_pynput_to_qt_seq,
+            pynput_from_qt=_qt_seq_to_pynput,
+        )
+        self.hotkey_field.saved.connect(self._save_bp_hotkey)
+        hk_row.addWidget(self.hotkey_field, 1)
         v.addLayout(hk_row)
 
         # Two CTAs side by side: live capture (real screenshot, what the
@@ -590,7 +591,7 @@ class MainWindow(QMainWindow):
         self.bp_title.setText(t("ui.main.bp_card_title"))
         self.bp_subtitle.setText(t("ui.main.bp_card_subtitle"))
         self.shortcut_label.setText(t("ui.main.shortcut"))
-        self.apply_btn.setText(t("ui.main.apply"))
+        self.hotkey_field.retranslate()
         self.capture_btn.setText(t("ui.main.bp_capture_cta"))
         self.capture_btn.setToolTip(t("ui.main.bp_capture_tip"))
         self.sample_btn.setText(t("ui.main.bp_sample_cta"))
@@ -639,8 +640,8 @@ class MainWindow(QMainWindow):
         self.trans_box.setTitle(t("ui.main.trans_hotkeys_section"))
         self.chat_hk_label.setText(t("ui.main.chat_translate_label"))
         self.compose_hk_label.setText(t("ui.main.compose_translate_label"))
-        self.chat_hk_apply.setText(t("ui.main.apply"))
-        self.compose_hk_apply.setText(t("ui.main.apply"))
+        self.chat_hk_field.retranslate()
+        self.compose_hk_field.retranslate()
 
         # Refresh derived labels that include translated text.
         self._refresh_roots()
@@ -783,15 +784,8 @@ class MainWindow(QMainWindow):
 
     # --- hotkey --------------------------------------------------------------
 
-    def _apply_hotkey(self) -> None:
-        combo = _qt_seq_to_pynput(self.hotkey_edit.keySequence())
-        if not combo:
-            QMessageBox.warning(
-                self,
-                t("ui.main.invalid_hotkey_title"),
-                t("ui.main.invalid_hotkey_body"),
-            )
-            return
+    def _save_bp_hotkey(self, combo: str) -> None:
+        """Persist + re-register the BP-intelligence hotkey."""
         self.config.hotkey = combo
         self.config.save()
         self.hotkey.set_hotkey(combo)
@@ -978,31 +972,15 @@ class MainWindow(QMainWindow):
 
     # --- translation hotkey config ----------------------------------------
 
-    def _apply_chat_translate_hotkey(self) -> None:
-        seq = self.chat_hk_edit.keySequence()
-        combo = _qt_seq_to_pynput(seq)
-        if not combo:
-            QMessageBox.warning(
-                self,
-                t("ui.main.invalid_hotkey_title"),
-                t("ui.main.invalid_hotkey_body"),
-            )
-            return
+    def _save_chat_translate_hotkey(self, combo: str) -> None:
+        """Persist + re-register the chat-OCR-translate hotkey."""
         self.config.chat_translate_hotkey = combo
         self.config.save()
         self.chat_translate_hotkey.set_hotkey(combo)
         self._log(t("ui.main.chat_translate_hotkey_registered", combo=combo))
 
-    def _apply_compose_translate_hotkey(self) -> None:
-        seq = self.compose_hk_edit.keySequence()
-        combo = _qt_seq_to_pynput(seq)
-        if not combo:
-            QMessageBox.warning(
-                self,
-                t("ui.main.invalid_hotkey_title"),
-                t("ui.main.invalid_hotkey_body"),
-            )
-            return
+    def _save_compose_translate_hotkey(self, combo: str) -> None:
+        """Persist + re-register the compose-translate hotkey."""
         self.config.compose_translate_hotkey = combo
         self.config.save()
         self.compose_translate_hotkey.set_hotkey(combo)
@@ -1017,7 +995,7 @@ class MainWindow(QMainWindow):
         if self._chat_trans_popup is None:
             self._chat_trans_popup = ChatTranslationPopup()
         self._chat_trans_busy = True
-        self.capture_progress.start(anchor=self)
+        self.capture_progress.start(anchor=self, flow="chat")
         self._log(t("ui.main.chat_translate_started"))
 
         thread = QThread(self)
