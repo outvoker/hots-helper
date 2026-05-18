@@ -22,7 +22,9 @@ model and as the right text (high confidence) from the Korean model.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -38,6 +40,24 @@ _MODELS_DIR = Path(__file__).resolve().parent / "models"
 # Lazy-initialised singletons keyed by language tag. Building each engine
 # costs ~0.5–1 s on a cold start; reuse keeps subsequent screenshots fast.
 _engines: dict[str, "object | None"] = {}
+_engine_lock = threading.Lock()
+
+# Workers reused across recognize() calls. We keep three threads — one
+# per language pass — so the typical case is "submit three jobs, wait
+# for all" without re-creating threads per screenshot.
+_pool: ThreadPoolExecutor | None = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool() -> ThreadPoolExecutor:
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadPoolExecutor(
+                max_workers=3,
+                thread_name_prefix="rapidocr",
+            )
+        return _pool
 
 
 @dataclass(frozen=True)
@@ -79,24 +99,33 @@ def _emit(progress: ProgressCallback, msg: str) -> None:
 
 
 def _get_engine(spec: _LangSpec):
-    """Return a cached RapidOCR engine for the given language spec."""
+    """Return a cached RapidOCR engine for the given language spec.
+
+    Thread-safe: the three parallel passes hit this concurrently on
+    first call. Without the lock, two threads would race to build the
+    same engine and double the (ONNX-heavy) init cost.
+    """
     cached = _engines.get(spec.tag)
     if cached is not None:
         return cached
-    from rapidocr_onnxruntime import RapidOCR
+    with _engine_lock:
+        cached = _engines.get(spec.tag)
+        if cached is not None:
+            return cached
+        from rapidocr_onnxruntime import RapidOCR
 
-    kwargs: dict = {}
-    if spec.rec_model_path is not None:
-        if not spec.rec_model_path.is_file():
-            raise FileNotFoundError(
-                f"missing OCR model {spec.rec_model_path}"
-            )
-        kwargs["rec_model_path"] = str(spec.rec_model_path)
-    if spec.rec_img_shape is not None:
-        kwargs["rec_img_shape"] = list(spec.rec_img_shape)
-    engine = RapidOCR(**kwargs)
-    _engines[spec.tag] = engine
-    return engine
+        kwargs: dict = {}
+        if spec.rec_model_path is not None:
+            if not spec.rec_model_path.is_file():
+                raise FileNotFoundError(
+                    f"missing OCR model {spec.rec_model_path}"
+                )
+            kwargs["rec_model_path"] = str(spec.rec_model_path)
+        if spec.rec_img_shape is not None:
+            kwargs["rec_img_shape"] = list(spec.rec_img_shape)
+        engine = RapidOCR(**kwargs)
+        _engines[spec.tag] = engine
+        return engine
 
 
 # --- bbox helpers ---------------------------------------------------------
@@ -225,25 +254,45 @@ def recognize(image_path: Path,
         _emit(progress, f"image stat failed: {e}")
         return []
 
-    passes: list[list[OcrBlock]] = []
-    for spec in _LANGS:
+    # Submit each language's recognition pass to a small thread pool
+    # and await the lot in parallel. ONNX Runtime sessions are
+    # independently thread-safe (each engine owns its own session +
+    # buffers) so the three passes don't serialise on shared state.
+    # Wall-clock time goes from sum(pass) ≈ 2.5s to max(pass) ≈ 1s.
+    def _job(spec: _LangSpec) -> tuple[_LangSpec, list[OcrBlock] | Exception]:
         try:
             engine = _get_engine(spec)
-        except FileNotFoundError as e:
-            _emit(progress, f"  [{spec.tag}] model missing — skipping ({e})")
+        except Exception as exc:
+            return spec, exc
+        try:
+            t_pass = time.monotonic()
+            blocks = _run_pass(engine, image_path, img_w, img_h)
+            logger.info(
+                "  [%s] %d block(s) in %.2fs",
+                spec.tag, len(blocks), time.monotonic() - t_pass,
+            )
+            return spec, blocks
+        except Exception as exc:
+            return spec, exc
+
+    pool = _get_pool()
+    futures = [pool.submit(_job, s) for s in _LANGS]
+    _emit(progress, f"  running {len(_LANGS)} language passes in parallel…")
+
+    passes: list[list[OcrBlock]] = []
+    for fut in futures:
+        spec, outcome = fut.result()
+        if isinstance(outcome, FileNotFoundError):
+            _emit(progress, f"  [{spec.tag}] model missing — skipping ({outcome})")
             continue
-        except Exception as e:
-            _emit(progress, f"  [{spec.tag}] init failed: {type(e).__name__}: {e}")
+        if isinstance(outcome, Exception):
+            _emit(
+                progress,
+                f"  [{spec.tag}] failed: {type(outcome).__name__}: {outcome}",
+            )
             continue
-        t1 = time.monotonic()
-        _emit(progress, f"  [{spec.tag}] running OCR pass…")
-        blocks = _run_pass(engine, image_path, img_w, img_h)
-        passes.append(blocks)
-        _emit(
-            progress,
-            f"  [{spec.tag}] {len(blocks)} block(s) "
-            f"in {time.monotonic() - t1:.2f}s",
-        )
+        passes.append(outcome)
+        _emit(progress, f"  [{spec.tag}] {len(outcome)} block(s)")
 
     if not passes:
         _emit(progress, "no OCR engines available — returning empty result")

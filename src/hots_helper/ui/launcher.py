@@ -37,8 +37,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
-    QHBoxLayout,
-    QLabel,
     QPushButton,
     QToolButton,
     QVBoxLayout,
@@ -99,11 +97,15 @@ class FloatingLauncher(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
-        # Two stacked layouts: the round chip is a fixed-size button,
-        # the expanded row sits next to it. We toggle them by show/hide.
-        outer = QHBoxLayout(self)
+        # Vertical stack: round chip on top, expansion panel underneath.
+        # Buttons drop down from the chip rather than fanning out to
+        # the right — keeps the launcher's horizontal footprint small
+        # so it doesn't run off the side of the screen when the chip
+        # is parked near the right edge.
+        outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(8)
+        outer.setSpacing(6)
+        outer.setAlignment(Qt.AlignHCenter)
 
         self._chip = QToolButton()
         self._chip.setFixedSize(_CHIP_SIZE, _CHIP_SIZE)
@@ -123,35 +125,36 @@ class FloatingLauncher(QWidget):
         )
         self._chip.installEventFilter(self)
         self._chip.clicked.connect(self._toggle_expanded)
-        outer.addWidget(self._chip)
+        outer.addWidget(self._chip, alignment=Qt.AlignHCenter)
 
-        # Expansion panel — a row of action buttons inside a gold-edged frame.
+        # Expansion panel — a vertical column of action buttons in a
+        # gold-edged rounded card. Sits directly under the chip.
         self._expand_panel = QFrame()
         self._expand_panel.setObjectName("launcherExpand")
         self._expand_panel.setStyleSheet(
             f"QFrame#launcherExpand {{"
             f" background: {BG_DEEP};"
             f" border: 1px solid {GOLD_DIM};"
-            f" border-radius: {_BTN_HEIGHT // 2 + 6}px;"
+            f" border-radius: 10px;"
             f"}}"
         )
-        row = QHBoxLayout(self._expand_panel)
-        row.setContentsMargins(8, 4, 8, 4)
-        row.setSpacing(6)
+        col = QVBoxLayout(self._expand_panel)
+        col.setContentsMargins(6, 6, 6, 6)
+        col.setSpacing(4)
 
         self._bp_btn = self._make_action_btn("ui.launcher.bp")
         self._bp_btn.clicked.connect(self._fire_bp)
-        row.addWidget(self._bp_btn)
+        col.addWidget(self._bp_btn)
 
         self._chat_btn = self._make_action_btn("ui.launcher.chat")
         self._chat_btn.clicked.connect(self._fire_chat)
-        row.addWidget(self._chat_btn)
+        col.addWidget(self._chat_btn)
 
         self._compose_btn = self._make_action_btn("ui.launcher.compose")
         self._compose_btn.clicked.connect(self._fire_compose)
-        row.addWidget(self._compose_btn)
+        col.addWidget(self._compose_btn)
 
-        outer.addWidget(self._expand_panel)
+        outer.addWidget(self._expand_panel, alignment=Qt.AlignHCenter)
         self._expand_panel.hide()
 
         # Drag state for the chip.
