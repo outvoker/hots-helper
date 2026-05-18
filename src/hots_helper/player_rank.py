@@ -21,6 +21,7 @@ chart.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 
 from .db import Store
@@ -108,90 +109,176 @@ SORT_POWER = "power"
 ALL_SORTS = (SORT_WLB, SORT_POWER)
 
 
+def _percentile_in(sorted_pop: list[float], v: float) -> float:
+    """Percentile rank of ``v`` in a pre-sorted population, in 0..1.
+
+    Uses ``bisect_right`` so identical values count as "at or below",
+    matching the intuition "how many of the population did I beat".
+    Empty / degenerate populations fall back to 0.5 (neutral).
+    """
+    n = len(sorted_pop)
+    if n == 0:
+        return 0.5
+    return bisect_right(sorted_pop, v) / n
+
+
+@dataclass(frozen=True)
+class PowerBaseline:
+    """Pre-sorted samples we use to compute percentile ranks.
+
+    Built once per dialog refresh / BP analysis pass and shared across
+    every player + every hero we score. The population is the *whole*
+    DB (filtered by Storm League by default), so a sparse leaderboard
+    can't artificially inflate scores — laolang's 22k hero damage
+    sits at percentile ~0.15 globally instead of 1.0 because they're
+    the only person on their board.
+    """
+    hero_damage: list[float]
+    siege_damage: list[float]
+    structure_damage: list[float]
+    healing: list[float]
+    damage_soaked: list[float]
+    xp: list[float]
+    cc: list[float]
+    kda: list[float]                  # per-match KDA = (K+A)/max(D,1)
+    deaths: list[float]               # raw deaths (smaller = better)
+    win_rates_per_match: list[float]  # 0 or 1 per match — for WR percentile
+
+
+def _build_baseline_from_rows(rows) -> PowerBaseline:
+    hero, siege, struct, heal, soak, xp, cc, kda, deaths, wr = (
+        [], [], [], [], [], [], [], [], [], [],
+    )
+    for r in rows:
+        d = max(float(r["deaths"] or 0.0), 1.0)
+        kda.append((float(r["kills"] or 0) + float(r["assists"] or 0)) / d)
+        hero.append(float(r["hero_damage"] or 0))
+        siege.append(float(r["siege_damage"] or 0))
+        struct.append(float(r["structure_damage"] or 0))
+        heal.append(float(r["healing"] or 0))
+        soak.append(float(r["damage_soaked"] or 0))
+        xp.append(float(r["xp"] or 0))
+        cc.append(float(r["cc"] or 0))
+        deaths.append(float(r["deaths"] or 0))
+        wr.append(1.0 if int(r["result"] or 0) == 1 else 0.0)
+    for lst in (hero, siege, struct, heal, soak, xp, cc, kda, deaths, wr):
+        lst.sort()
+    return PowerBaseline(
+        hero_damage=hero,
+        siege_damage=siege,
+        structure_damage=struct,
+        healing=heal,
+        damage_soaked=soak,
+        xp=xp,
+        cc=cc,
+        kda=kda,
+        deaths=deaths,
+        win_rates_per_match=wr,
+    )
+
+
+def build_power_baseline(store: Store) -> PowerBaseline:
+    """Pull the global per-match population once. ~1ms per 1k rows."""
+    rows = store.per_match_metric_samples()
+    return _build_baseline_from_rows(rows)
+
+
 # Weights for the "combat power" score. Tuned by feel: KDA + win rate
 # carry the most weight (they're the cleanest signals of "this player
 # does the right thing in fights"); damage / soak / xp / cc fill in
-# the rest. Each component is normalised to 0..1 against the board's
-# own population (``_score_population``) so the weights are about
-# *relative importance*, not absolute units.
+# the rest. Each component is a percentile rank against the global
+# baseline so the weights are about *relative importance*, not units.
 #
 # Self-healing is excluded — it's mostly inflated by self-sustain
 # heroes' baseline regen and doesn't track player skill well.
 _POWER_WEIGHTS: dict[str, float] = {
     "win_rate":          0.30,
-    "wilson_lb":         0.10,
     "kda":               0.20,
-    "hero_damage":       0.10,
-    "siege_damage":      0.04,
-    "structure_damage":  0.03,
-    "healing":           0.07,
-    "damage_soaked":     0.05,
-    "experience":        0.06,
-    "cc":                0.03,
-    "deaths_inverse":    0.02,  # fewer deaths = higher
+    "hero_damage":       0.12,
+    "siege_damage":      0.05,
+    "structure_damage":  0.04,
+    "healing":           0.08,
+    "damage_soaked":     0.06,
+    "experience":        0.07,
+    "cc":                0.04,
+    "deaths_inverse":    0.04,  # lower deaths = higher percentile
 }
 
 
-def _percentile_norm(values: list[float], v: float) -> float:
-    """Population-relative normalisation in 0..1.
+def power_score(
+    *,
+    baseline: PowerBaseline,
+    win_rate: float,
+    avg_k: float,
+    avg_d: float,
+    avg_a: float,
+    avg_hero_dmg: float,
+    avg_siege_dmg: float,
+    avg_structure_dmg: float,
+    avg_healing: float,
+    avg_dmg_soaked: float,
+    avg_xp: float,
+    avg_cc: float,
+) -> float:
+    """0..100 composite score, percentile-ranked vs ``baseline``.
 
-    Returns the fraction of the population that ``v`` ranks at-or-
-    below — equivalent to a percentile rank. We use this instead of
-    naive min-max scaling because the metrics are heavy-tailed
-    (top-1% players post 5x median hero damage), so min-max gives the
-    bottom 90% nearly-zero scores and a straight line of 0.95+ at the
-    tail. Percentiles compress that tail without losing ordering.
+    Designed to be called from any context that has a per-player or
+    per-hero average — the leaderboard, the hero ranking dialog, and
+    eventually the BP popup cards. All inputs are *averages over
+    matches*; the function does no aggregation.
     """
-    if not values:
-        return 0.0
-    n = len(values)
-    # Count of values ≤ v.
-    le = sum(1 for x in values if x <= v)
-    return le / n
+    kda = (avg_k + avg_a) / max(avg_d, 1.0)
+    score = 0.0
+    score += _POWER_WEIGHTS["win_rate"] * _percentile_in(
+        baseline.win_rates_per_match, win_rate
+    )
+    score += _POWER_WEIGHTS["kda"] * _percentile_in(baseline.kda, kda)
+    score += _POWER_WEIGHTS["hero_damage"] * _percentile_in(
+        baseline.hero_damage, avg_hero_dmg
+    )
+    score += _POWER_WEIGHTS["siege_damage"] * _percentile_in(
+        baseline.siege_damage, avg_siege_dmg
+    )
+    score += _POWER_WEIGHTS["structure_damage"] * _percentile_in(
+        baseline.structure_damage, avg_structure_dmg
+    )
+    score += _POWER_WEIGHTS["healing"] * _percentile_in(
+        baseline.healing, avg_healing
+    )
+    score += _POWER_WEIGHTS["damage_soaked"] * _percentile_in(
+        baseline.damage_soaked, avg_dmg_soaked
+    )
+    score += _POWER_WEIGHTS["experience"] * _percentile_in(
+        baseline.xp, avg_xp
+    )
+    score += _POWER_WEIGHTS["cc"] * _percentile_in(baseline.cc, avg_cc)
+    # Deaths: lower is better. Percentile in raw deaths gives "how many
+    # of the population die >= as much as me" if we flip the sign.
+    score += _POWER_WEIGHTS["deaths_inverse"] * (
+        1.0 - _percentile_in(baseline.deaths, avg_d)
+    )
+    return score * 100.0
 
 
-def _score_population(rows: list[PlayerRankRow]) -> list[PlayerRankRow]:
-    """Compute and attach the composite power score to each row."""
-    if not rows:
-        return rows
-
-    # Pre-extract each metric so we can pass through the percentile fn.
-    pop = {
-        "win_rate":         [r.win_rate for r in rows],
-        "wilson_lb":        [r.wilson_lb for r in rows],
-        "kda":              [r.kda for r in rows],
-        "hero_damage":      [r.avg_hero_dmg for r in rows],
-        "siege_damage":     [r.avg_siege_dmg for r in rows],
-        "structure_damage": [r.avg_structure_dmg for r in rows],
-        "healing":          [r.avg_healing for r in rows],
-        "damage_soaked":    [r.avg_dmg_soaked for r in rows],
-        "experience":       [r.avg_xp for r in rows],
-        "cc":               [r.avg_cc for r in rows],
-        # Deaths is the only metric where lower is better — we negate
-        # so the percentile gives "fewer-deaths-is-better" as 1.0.
-        "deaths_inverse":   [-r.avg_d for r in rows],
-    }
-
+def _score_population(
+    rows: list[PlayerRankRow], baseline: PowerBaseline
+) -> list[PlayerRankRow]:
+    """Attach a power score to each row using the shared global baseline."""
     out: list[PlayerRankRow] = []
     for r in rows:
-        score = 0.0
-        for key, weight in _POWER_WEIGHTS.items():
-            value = {
-                "win_rate":         r.win_rate,
-                "wilson_lb":        r.wilson_lb,
-                "kda":              r.kda,
-                "hero_damage":      r.avg_hero_dmg,
-                "siege_damage":     r.avg_siege_dmg,
-                "structure_damage": r.avg_structure_dmg,
-                "healing":          r.avg_healing,
-                "damage_soaked":    r.avg_dmg_soaked,
-                "experience":       r.avg_xp,
-                "cc":               r.avg_cc,
-                "deaths_inverse":   -r.avg_d,
-            }[key]
-            score += weight * _percentile_norm(pop[key], value)
-        # Scale to 0..100 for display.
-        out.append(PlayerRankRow(**{**r.__dict__, "power": score * 100.0}))
+        s = power_score(
+            baseline=baseline,
+            win_rate=r.win_rate,
+            avg_k=r.avg_k, avg_d=r.avg_d, avg_a=r.avg_a,
+            avg_hero_dmg=r.avg_hero_dmg,
+            avg_siege_dmg=r.avg_siege_dmg,
+            avg_structure_dmg=r.avg_structure_dmg,
+            avg_healing=r.avg_healing,
+            avg_dmg_soaked=r.avg_dmg_soaked,
+            avg_xp=r.avg_xp,
+            avg_cc=r.avg_cc,
+        )
+        out.append(PlayerRankRow(**{**r.__dict__, "power": s}))
     return out
 
 
@@ -236,6 +323,7 @@ def compute_board(
     min_games: int = 5,
     limit: int = 10,
     sort_mode: str = SORT_WLB,
+    baseline: PowerBaseline | None = None,
 ) -> list[PlayerRankRow]:
     """Compute one of :data:`ALL_BOARDS`.
 
@@ -247,8 +335,10 @@ def compute_board(
 
     ``sort_mode`` controls the primary sort key — see
     :func:`_sort_and_rerank`. The composite power score is always
-    computed (it's cheap), so switching modes in the UI doesn't
-    require re-querying the DB.
+    computed (it's cheap) using either the provided ``baseline`` or
+    a freshly-built one, so switching modes in the UI doesn't
+    require re-querying the DB. Callers that score multiple boards
+    in one shot should pass a shared baseline.
     """
     if board not in ALL_BOARDS:
         raise ValueError(f"unknown board: {board!r}")
@@ -274,7 +364,9 @@ def compute_board(
     if not rows:
         return []
     scored = [_row_to_rank(r, rank=0) for r in rows]
-    scored = _score_population(scored)
+    if baseline is None:
+        baseline = build_power_baseline(store)
+    scored = _score_population(scored, baseline)
     return _sort_and_rerank(
         scored,
         direction=direction,

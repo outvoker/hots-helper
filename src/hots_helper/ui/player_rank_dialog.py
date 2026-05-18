@@ -140,9 +140,10 @@ class PlayerRankDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(False)
         self._col_keys = [
-            "ui.rank.col_rank", "ui.rank.col_name", "ui.rank.col_games",
-            "ui.rank.col_wins", "ui.rank.col_wr", "ui.rank.col_wlb",
+            "ui.rank.col_rank", "ui.rank.col_name",
             "ui.rank.col_power",
+            "ui.rank.col_games", "ui.rank.col_wins",
+            "ui.rank.col_wr", "ui.rank.col_wlb",
             "ui.rank.col_kda", "ui.rank.col_hero_dmg",
             "ui.rank.col_struct", "ui.rank.col_healing",
             "ui.rank.col_soak", "ui.rank.col_xp",
@@ -239,11 +240,11 @@ class PlayerRankDialog(QDialog):
             cells = [
                 str(p.rank),
                 p.display_name or "?",
+                f"{p.power:.0f}",
                 str(p.games),
                 str(p.wins),
                 f"{p.win_rate*100:.0f}%",
                 f"{p.wilson_lb*100:.0f}%",
-                f"{p.power:.0f}",
                 f"{p.avg_k:.1f}/{p.avg_d:.1f}/{p.avg_a:.1f}",
                 _fmt_k(p.avg_hero_dmg),
                 _fmt_k(p.avg_structure_dmg),

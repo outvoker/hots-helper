@@ -619,6 +619,12 @@ class Store:
         # the opposite team via solo-queue, MIN picks one side and the
         # others count as opponents — acceptable noise in a feature
         # that's already best-effort.
+        # Squad members are *not* excluded from the result. The boards
+        # aggregate "everyone who's played alongside or against the
+        # squad", and the squad themselves are part of "alongside the
+        # squad" — including them lets the user see their own stats
+        # ranked next to random teammates and call out who in the
+        # 5-stack is dragging the team down.
         return self.conn.execute(
             f"""
             SELECT pm.toon_handle,
@@ -646,8 +652,7 @@ class Store:
                 GROUP BY replay_id
             ) otm ON otm.replay_id = pm.replay_id
             LEFT JOIN players p ON p.toon_handle = pm.toon_handle
-            WHERE pm.toon_handle NOT IN ({squad_placeholders})
-              AND pm.team {team_op} otm.our_team
+            WHERE pm.team {team_op} otm.our_team
               {clause}
             GROUP BY pm.toon_handle
             HAVING COUNT(*) >= ?
@@ -655,7 +660,6 @@ class Store:
             LIMIT ?
             """,
             (
-                *squad_handles,
                 *squad_handles,
                 *mode_params,
                 min_games,
@@ -691,6 +695,75 @@ class Store:
             (*mode_params, min_games),
         ).fetchall()
         return {r["toon_handle"] for r in rows}
+
+    def per_match_metric_samples(
+        self,
+        *,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+        limit: int = 100_000,
+    ) -> list[sqlite3.Row]:
+        """Raw per-match metric rows used as the population baseline
+        for the composite "combat power" score.
+
+        Each row = one player_match. Computing percentile ranks against
+        this universe (rather than each leaderboard slice individually)
+        keeps the score stable: a 22k-hero-damage average is "low" no
+        matter which board you put the player on, instead of being
+        rescaled to 100 just because they're the only entry on a
+        sparsely-populated worst-teammate board.
+        """
+        clause, mode_params = _mode_clause(mode_filter)
+        return self.conn.execute(
+            f"""
+            SELECT pm.kills, pm.deaths, pm.assists,
+                   pm.hero_damage, pm.siege_damage, pm.structure_damage,
+                   pm.healing, pm.damage_taken, pm.damage_soaked,
+                   pm.experience_contribution AS xp,
+                   pm.time_cc_enemy_heroes    AS cc,
+                   pm.result
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            WHERE 1=1{clause}
+            ORDER BY r.played_at DESC
+            LIMIT ?
+            """,
+            (*mode_params, limit),
+        ).fetchall()
+
+    def hero_aggregate_stats(
+        self,
+        *,
+        map_name: str | None = None,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+    ) -> list[sqlite3.Row]:
+        """Per-hero average stats — the population the hero leaderboard
+        scores against."""
+        clause, mode_params = _mode_clause(mode_filter)
+        sql = f"""
+            SELECT pm.hero,
+                   COUNT(*) AS games,
+                   SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
+                   AVG(pm.kills)            AS avg_k,
+                   AVG(pm.deaths)           AS avg_d,
+                   AVG(pm.assists)          AS avg_a,
+                   AVG(pm.hero_damage)      AS avg_hero_dmg,
+                   AVG(pm.siege_damage)     AS avg_siege_dmg,
+                   AVG(pm.structure_damage) AS avg_structure_dmg,
+                   AVG(pm.healing)          AS avg_healing,
+                   AVG(pm.damage_taken)     AS avg_dmg_taken,
+                   AVG(pm.damage_soaked)    AS avg_dmg_soaked,
+                   AVG(pm.experience_contribution) AS avg_xp,
+                   AVG(pm.time_cc_enemy_heroes) AS avg_cc
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            WHERE 1=1{clause}
+        """
+        params: list[Any] = list(mode_params)
+        if map_name:
+            sql += " AND r.map_name = ?"
+            params.append(map_name)
+        sql += " GROUP BY pm.hero"
+        return self.conn.execute(sql, params).fetchall()
 
     # --- hero-centric analytics ---------------------------------------------
 

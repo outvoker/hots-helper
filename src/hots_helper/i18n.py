@@ -617,6 +617,7 @@ _translations: dict[str, dict[str, str]] = {
     "ui.aram.sort": {"zh": "排序：", "en": "Sort by:"},
     "ui.aram.sort_wr": {"zh": "胜率", "en": "Win-rate"},
     "ui.aram.sort_wlb": {"zh": "保守胜率（推荐）", "en": "Conservative win-rate (recommended)"},
+    "ui.aram.sort_power": {"zh": "综合战斗力", "en": "Combat power"},
     "ui.aram.sort_games": {"zh": "局数", "en": "Games"},
     "ui.aram.sort_hero": {"zh": "英雄名", "en": "Hero name"},
     "ui.aram.sort_tip": {

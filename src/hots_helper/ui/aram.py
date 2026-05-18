@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from ..db import Store
 from ..i18n import on_change as on_lang_change, t
 from ..maps import ARAM_MAPS, STORM_LEAGUE_MAPS
+from ..player_rank import build_power_baseline, power_score
 from ..stats import wilson_lower_bound
 
 
@@ -111,6 +112,7 @@ class HeroRankingDialog(QDialog):
         # over-promotes any hero a single player happens to have a 5/5
         # streak on.
         self.sort_combo.addItem("", "wlb")
+        self.sort_combo.addItem("", "power")
         self.sort_combo.addItem("", "wr")
         self.sort_combo.addItem("", "games")
         self.sort_combo.addItem("", "hero")
@@ -150,11 +152,13 @@ class HeroRankingDialog(QDialog):
         # Column header keys; the labels are filled in via _retranslate.
         self._column_keys = [
             "ui.aram.col_rank", "ui.aram.col_hero",
+            "ui.rank.col_power",
             "ui.aram.col_games", "ui.aram.col_wins",
             "ui.aram.col_wr", "ui.aram.col_wlb",
             "ui.aram.col_kda", "ui.aram.col_hero_dmg",
             "ui.aram.col_dmg_taken", "ui.aram.col_healing",
-            "ui.aram.col_struct", "ui.aram.col_xp",
+            "ui.aram.col_struct", "ui.rank.col_soak",
+            "ui.aram.col_xp",
         ]
         self.table.setColumnCount(len(self._column_keys))
         for i in range(len(self._column_keys)):
@@ -217,6 +221,7 @@ class HeroRankingDialog(QDialog):
         sort_keys = {
             "wr": "ui.aram.sort_wr",
             "wlb": "ui.aram.sort_wlb",
+            "power": "ui.aram.sort_power",
             "games": "ui.aram.sort_games",
             "hero": "ui.aram.sort_hero",
         }
@@ -292,12 +297,24 @@ class HeroRankingDialog(QDialog):
                    AVG(pm.damage_taken)      AS dt,
                    AVG(pm.healing)           AS hl,
                    AVG(pm.structure_damage)  AS strd,
-                   AVG(pm.experience_contribution) AS xp
+                   AVG(pm.siege_damage)      AS sgd,
+                   AVG(pm.damage_soaked)     AS soak,
+                   AVG(pm.experience_contribution) AS xp,
+                   AVG(pm.time_cc_enemy_heroes) AS cc
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
             WHERE r.mode = ?{map_clause_joined}
             GROUP BY pm.hero
         """, tuple(params_joined)).fetchall()
+
+        # Build the global per-match baseline once for the power score.
+        # Heavy-tailed metrics get percentile-ranked against this so a
+        # niche hero with 1 game can't get a 100 just by being its
+        # board's only entry.
+        try:
+            baseline = build_power_baseline(self.store)
+        except Exception:
+            baseline = None
 
         min_games = self.min_games_spin.value()
         ranked = []
@@ -307,19 +324,44 @@ class HeroRankingDialog(QDialog):
             if g < min_games:
                 continue
             wlb = wilson_lower_bound(won, g)
+            wr = won / g if g else 0.0
+            avg_k = float(r["k"] or 0); avg_d = float(r["d"] or 0)
+            avg_a = float(r["a"] or 0)
+            avg_hd = float(r["hd"] or 0); avg_strd = float(r["strd"] or 0)
+            avg_sgd = float(r["sgd"] or 0); avg_hl = float(r["hl"] or 0)
+            avg_soak = float(r["soak"] or 0); avg_xp = float(r["xp"] or 0)
+            avg_cc = float(r["cc"] or 0)
+            if baseline is not None:
+                power = power_score(
+                    baseline=baseline,
+                    win_rate=wr,
+                    avg_k=avg_k, avg_d=avg_d, avg_a=avg_a,
+                    avg_hero_dmg=avg_hd,
+                    avg_siege_dmg=avg_sgd,
+                    avg_structure_dmg=avg_strd,
+                    avg_healing=avg_hl,
+                    avg_dmg_soaked=avg_soak,
+                    avg_xp=avg_xp,
+                    avg_cc=avg_cc,
+                )
+            else:
+                power = 0.0
             ranked.append({
                 "hero": r["hero"], "games": g, "wins": won,
-                "wr": won / g if g else 0.0, "wlb": wlb,
-                "k": float(r["k"] or 0), "d": float(r["d"] or 0),
-                "a": float(r["a"] or 0),
-                "hd": float(r["hd"] or 0), "dt": float(r["dt"] or 0),
-                "hl": float(r["hl"] or 0), "strd": float(r["strd"] or 0),
-                "xp": float(r["xp"] or 0),
+                "wr": wr, "wlb": wlb,
+                "power": power,
+                "k": avg_k, "d": avg_d, "a": avg_a,
+                "hd": avg_hd, "dt": float(r["dt"] or 0),
+                "hl": avg_hl, "strd": avg_strd,
+                "soak": avg_soak,
+                "xp": avg_xp,
             })
 
         sort_key = self.sort_combo.currentData()
         if sort_key == "wlb":
             ranked.sort(key=lambda x: -x["wlb"])
+        elif sort_key == "power":
+            ranked.sort(key=lambda x: -x["power"])
         elif sort_key == "wr":
             ranked.sort(key=lambda x: -x["wr"])
         elif sort_key == "games":
@@ -349,6 +391,7 @@ class HeroRankingDialog(QDialog):
             cells = [
                 str(i + 1),
                 r["hero"],
+                f"{r['power']:.0f}",
                 str(r["games"]),
                 str(r["wins"]),
                 f"{r['wr']*100:.0f}%",
@@ -358,6 +401,7 @@ class HeroRankingDialog(QDialog):
                 _fmt_k(r["dt"]),
                 _fmt_k(r["hl"]),
                 _fmt_k(r["strd"]),
+                _fmt_k(r["soak"]),
                 _fmt_k(r["xp"]),
             ]
             for j, txt in enumerate(cells):
