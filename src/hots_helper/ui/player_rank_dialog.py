@@ -151,10 +151,11 @@ class PlayerRankDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
-        # Click-to-sort. Columns hold numeric data via setData(EditRole)
-        # so the sort is numerically correct even though the cell text
-        # is formatted (e.g. "12.3k", "47%").
-        self.table.setSortingEnabled(True)
+        # We do our own sorting in Python so the squad-extras rows
+        # can stay glued to the bottom no matter which column the
+        # user clicks. Qt's setSortingEnabled would honour the click
+        # but reorder *everyone*, dragging extras into the slice.
+        self.table.setSortingEnabled(False)
 
         self._col_keys = [
             "ui.rank.col_rank",
@@ -176,40 +177,24 @@ class PlayerRankDialog(QDialog):
         )
         self.table.horizontalHeader().setMinimumSectionSize(40)
         self.table.setColumnWidth(COL_NAME, 220)
-        # Default sort: combat power, descending.
-        self.table.sortByColumn(COL_POWER, Qt.DescendingOrder)
+        # Make the header act sortable to the eye (arrow indicator,
+        # click highlight) even though we run the sort ourselves.
+        self.table.horizontalHeader().setSortIndicatorShown(True)
+        self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        # Default state — power desc.
+        self._sort_col = COL_POWER
+        self._sort_desc = True
+        self.table.horizontalHeader().setSortIndicator(
+            COL_POWER, Qt.DescendingOrder
+        )
         self.table.verticalHeader().setVisible(True)
         root.addWidget(self.table, 1)
 
-        # Squad "extras" — anyone in the 5-stack who fell outside the
-        # top-N slice gets pinned right under the main table. No
-        # header / no separator label so the two tables read like a
-        # single continuous list; the gold tint on extras rows is the
-        # only visual distinction. Sorting is disabled here so the
-        # squad section keeps its own (real-rank) order even when
-        # the user re-sorts the main table.
-        self.extras_table = QTableWidget()
-        self.extras_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.extras_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.extras_table.setAlternatingRowColors(True)
-        self.extras_table.setSortingEnabled(False)
-        self.extras_table.setColumnCount(len(self._col_keys))
-        # Mirror every column-resize mode from the main table so the
-        # cell boundaries line up visually.
-        for i in range(len(self._col_keys)):
-            self.extras_table.horizontalHeader().setSectionResizeMode(
-                i, QHeaderView.ResizeToContents
-            )
-        self.extras_table.horizontalHeader().setSectionResizeMode(
-            COL_NAME, QHeaderView.Stretch
-        )
-        self.extras_table.setColumnWidth(COL_NAME, 220)
-        self.extras_table.horizontalHeader().setVisible(False)
-        self.extras_table.verticalHeader().setVisible(True)
-        # Compact: fits up to ~5 rows so the squad section never grows
-        # large enough to dominate the dialog.
-        self.extras_table.setMaximumHeight(180)
-        root.addWidget(self.extras_table)
+        # Cache so a header click doesn't have to re-query the DB.
+        # Repopulated on every _reload.
+        self._cached_top: list[PlayerRankRow] = []
+        self._cached_extras: list[PlayerRankRow] = []
 
         self.footer_label = QLabel()
         self.footer_label.setTextFormat(Qt.RichText)
@@ -316,38 +301,77 @@ class PlayerRankDialog(QDialog):
         rows: list[PlayerRankRow],
         extras: list[PlayerRankRow],
     ) -> None:
-        """Populate both tables: the main ``self.table`` with the
-        top-N slice (click-to-sort enabled), and ``self.extras_table``
-        below it with the squad members that didn't make the cut.
+        """Render top-N slice + squad extras into the single table.
 
-        Splitting the two tables means the user can click any column
-        on the main table to re-sort without dragging the squad
-        section into the population — the extras list keeps its
-        "here are your buddies' real ranks" framing intact.
+        We sort the slice in Python (driven by ``_sort_col`` /
+        ``_sort_desc`` the user picked via the header) and append the
+        extras unsorted at the end. Cache is updated so a future
+        header click can re-render without re-querying the DB.
         """
-        # Main slice: disable sorting while populating, then re-enable
-        # so the column headers stay live.
-        tbl = self.table
-        tbl.setSortingEnabled(False)
-        tbl.setRowCount(len(rows))
-        for i, p in enumerate(rows):
-            self._fill_row(tbl, i, p, is_extra=False)
-        tbl.setSortingEnabled(True)
+        self._cached_top = list(rows)
+        self._cached_extras = list(extras)
+        self._render_table()
 
-        # Extras: pinned, no sort. Hide the whole section if every
-        # squad member already showed up in the main slice (e.g.
-        # nothing pushed them off, or limit is huge).
-        ex = self.extras_table
-        ex.setRowCount(len(extras))
-        for j, p in enumerate(extras):
-            self._fill_row(ex, j, p, is_extra=True)
-        if extras:
-            ex.show()
-            # Cap the table to the rows we actually have, so a 1-extra
-            # case doesn't show 5 rows of empty space.
-            ex.setFixedHeight(min(180, 32 * len(extras) + 8))
+    def _render_table(self) -> None:
+        """Re-paint the table from the cached top + extras using the
+        current sort column / direction. Top section is sorted;
+        extras section is appended after, in the order the SQL
+        returned them (which preserves the real-rank ordering we set
+        in ``compute_player_rankings``).
+        """
+        tbl = self.table
+        # Sort the top slice. Name column sorts by text; everything
+        # else sorts numerically by the underlying ``sort_value`` we
+        # stash on each cell.
+        sorted_top = sorted(
+            self._cached_top,
+            key=lambda p: self._sort_key(p),
+            reverse=self._sort_desc,
+        )
+        all_rows = sorted_top + self._cached_extras
+        tbl.setRowCount(len(all_rows))
+        n_top = len(sorted_top)
+        for i, p in enumerate(all_rows):
+            self._fill_row(tbl, i, p, is_extra=(i >= n_top))
+
+    # Column → key extractor for Python-side sorting. Power is the
+    # default fallback so an unknown column doesn't blow up.
+    _SORT_GETTERS = {
+        COL_RANK:   lambda p: p.rank,
+        COL_NAME:   lambda p: p.display_name or "",
+        COL_POWER:  lambda p: p.power,
+        COL_GAMES:  lambda p: p.games,
+        COL_WINS:   lambda p: p.wins,
+        COL_WR:     lambda p: p.win_rate,
+        COL_WLB:    lambda p: p.wilson_lb,
+        COL_KDA:    lambda p: p.kda,
+        COL_HD:     lambda p: p.avg_hero_dmg,
+        COL_STRUCT: lambda p: p.avg_structure_dmg,
+        COL_HEAL:   lambda p: p.avg_healing,
+        COL_SOAK:   lambda p: p.avg_dmg_soaked,
+        COL_XP:     lambda p: p.avg_xp,
+    }
+
+    def _sort_key(self, p: PlayerRankRow):
+        getter = self._SORT_GETTERS.get(self._sort_col)
+        if getter is None:
+            return p.power
+        return getter(p)
+
+    def _on_header_clicked(self, col: int) -> None:
+        """Toggle direction when clicking the same column; otherwise
+        switch to the new column with a sensible default direction
+        (numeric columns descend, the name column ascends)."""
+        if col == self._sort_col:
+            self._sort_desc = not self._sort_desc
         else:
-            ex.hide()
+            self._sort_col = col
+            self._sort_desc = (col != COL_NAME)
+        self.table.horizontalHeader().setSortIndicator(
+            col,
+            Qt.DescendingOrder if self._sort_desc else Qt.AscendingOrder,
+        )
+        self._render_table()
 
     def _fill_row(
         self,
