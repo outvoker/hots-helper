@@ -110,17 +110,25 @@ class HeroRankingDialog(QDialog):
         self.sort_label = QLabel()
         header.addWidget(self.sort_label)
         self.sort_combo = QComboBox()
-        # WLB ("conservative win-rate") is first so it's the default —
-        # it's the right metric for BP decisions, since plain win-rate
-        # over-promotes any hero a single player happens to have a 5/5
-        # streak on.
-        self.sort_combo.addItem("", "wlb")
+        # Power ("composite combat rating") is first so it's the
+        # default — it's the multi-metric synthesis the user came
+        # here for. WLB and raw WR are still one click away.
         self.sort_combo.addItem("", "power")
+        self.sort_combo.addItem("", "wlb")
         self.sort_combo.addItem("", "wr")
         self.sort_combo.addItem("", "games")
         self.sort_combo.addItem("", "hero")
         self.sort_combo.currentIndexChanged.connect(self._reload)
         header.addWidget(self.sort_combo)
+
+        # Tiny "?" button next to the sort dropdown — opens the
+        # power score help window. Same affordance shows up on the
+        # player rank dialog so the help text lives in one place.
+        self.power_help_btn = QPushButton("?")
+        self.power_help_btn.setFixedWidth(28)
+        self.power_help_btn.setToolTip(t("ui.power_help.btn_tip"))
+        self.power_help_btn.clicked.connect(self._show_power_help)
+        header.addWidget(self.power_help_btn)
 
         self.close_btn = QPushButton()
         self.close_btn.clicked.connect(self.close)
@@ -415,6 +423,12 @@ class HeroRankingDialog(QDialog):
 
         # Re-apply any active search highlight
         self._on_search_changed(self.search_edit.text())
+
+    # --- power help ------------------------------------------------------
+
+    def _show_power_help(self) -> None:
+        from .power_help import PowerHelpDialog
+        PowerHelpDialog(self).exec()
 
     # --- search ----------------------------------------------------------
 

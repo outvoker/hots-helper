@@ -161,6 +161,7 @@ hiddenimports = [
     "hots_helper.ui.macos_overlay",
     "hots_helper.player_rank",
     "hots_helper.ui.player_rank_dialog",
+    "hots_helper.ui.power_help",
     # PySide6 modules referenced only lazily
     "PySide6.QtCore",
     "PySide6.QtGui",

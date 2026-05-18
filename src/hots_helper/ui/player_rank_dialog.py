@@ -99,17 +99,32 @@ class PlayerRankDialog(QDialog):
         self.board_combo.currentIndexChanged.connect(lambda _i: self._reload())
         head.addWidget(self.board_combo)
 
-        # Sort mode — Wilson lower bound (default) or composite combat
-        # power. Same for every board — the dialog flips the direction
-        # internally based on whether the board is a "worst" or "best"
-        # board.
+        # Sort mode — composite combat power (default) or Wilson lower
+        # bound on win rate. Same dropdown for every board; the dialog
+        # flips the sort direction internally based on whether the
+        # board is a "worst" or "best" board.
         self.sort_label = QLabel()
         head.addWidget(self.sort_label)
         self.sort_combo = QComboBox()
         for sort in ALL_SORTS:
             self.sort_combo.addItem("", sort)
+        # Default to power: it's the multi-metric synthesis the user
+        # came here for. WLB is still one click away.
+        for i in range(self.sort_combo.count()):
+            if self.sort_combo.itemData(i) == SORT_POWER:
+                self.sort_combo.setCurrentIndex(i)
+                break
         self.sort_combo.currentIndexChanged.connect(lambda _i: self._reload())
         head.addWidget(self.sort_combo)
+
+        # "?" beside the sort dropdown opens the combat-power help
+        # dialog so users can see how the score is built without
+        # leaving the screen.
+        self.power_help_btn = QPushButton("?")
+        self.power_help_btn.setFixedWidth(28)
+        self.power_help_btn.setToolTip(t("ui.power_help.btn_tip"))
+        self.power_help_btn.clicked.connect(self._show_power_help)
+        head.addWidget(self.power_help_btn)
 
         self.min_games_label = QLabel()
         head.addWidget(self.min_games_label)
@@ -230,6 +245,10 @@ class PlayerRankDialog(QDialog):
         )
         _, tone = _BOARD_META.get(board, ("", QColor(220, 220, 220)))
         self._fill_table(rows, tone=tone)
+
+    def _show_power_help(self) -> None:
+        from .power_help import PowerHelpDialog
+        PowerHelpDialog(self).exec()
 
     def _fill_table(
         self,
