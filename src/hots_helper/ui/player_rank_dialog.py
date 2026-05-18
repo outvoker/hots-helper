@@ -322,14 +322,17 @@ class PlayerRankDialog(QDialog):
         )
         slice_rows = sorted_all[:limit]
         slice_handles = {p.toon_handle for p in slice_rows}
-        # Extras = squad members not already in the slice. Order them
-        # by their global power rank (small rank number first) so the
-        # pinned section reads naturally even for heavy slicing.
+        # Extras = squad members not already in the slice. Sort them
+        # by the *current* column too (not by global power rank) so
+        # the pinned section is internally consistent with the main
+        # slice — clicking "WR desc" puts the highest-WR squad member
+        # first inside the extras block.
         extras = sorted(
             (p for p in self._cached_all
              if p.toon_handle in self._squad_set
              and p.toon_handle not in slice_handles),
-            key=lambda p: p.rank,
+            key=lambda p: self._sort_key(p),
+            reverse=self._sort_desc,
         )
 
         all_visible = slice_rows + extras
