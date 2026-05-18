@@ -48,7 +48,13 @@ class PlayerRankDialog(QDialog):
     def __init__(self, store: Store, parent=None) -> None:
         super().__init__(parent)
         self.store = store
+        # 1180×720 used to clip Korean / Chinese display names because
+        # the name column stretched into ~100px after the eight
+        # numeric columns took their share on each side. 1480×800
+        # gives the name columns a comfortable ~220px each at the
+        # default split.
         self.setMinimumSize(1180, 720)
+        self.resize(1480, 800)
         self._build_ui()
         self._retranslate()
         on_lang_change(lambda _c: self._on_lang())
@@ -137,9 +143,16 @@ class PlayerRankDialog(QDialog):
             tbl.horizontalHeader().setSectionResizeMode(
                 i, QHeaderView.ResizeToContents
             )
+        # The name column gets the leftover space — but ResizeToContents
+        # alone collapses long Korean / Chinese handles into ellipsis,
+        # because Qt sums the header pre-elide width. Set an explicit
+        # minimum and Stretch policy so the column always has at least
+        # ~200px and grows when the dialog is widened.
         tbl.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.Stretch
         )
+        tbl.horizontalHeader().setMinimumSectionSize(40)
+        tbl.setColumnWidth(1, 220)
         v.addWidget(tbl, 1)
         return box, title, tbl
 
