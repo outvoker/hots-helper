@@ -132,6 +132,13 @@ class PowerBaseline:
     can't artificially inflate scores — laolang's 22k hero damage
     sits at percentile ~0.15 globally instead of 1.0 because they're
     the only person on their board.
+
+    ``raw_power_pool`` holds the pre-rank weighted scores for every
+    per-match sample in the baseline — :func:`power_score` takes its
+    own raw output, looks it up in this pool, and returns the
+    percentile rank. The two-step pipeline means the final number is
+    always "you beat X% of all observed performances" rather than a
+    weighted-average that could be skewed by a single extreme metric.
     """
     hero_damage: list[float]
     siege_damage: list[float]
@@ -143,6 +150,7 @@ class PowerBaseline:
     kda: list[float]                  # per-match KDA = (K+A)/max(D,1)
     deaths: list[float]               # raw deaths (smaller = better)
     win_rates_per_match: list[float]  # 0 or 1 per match — for WR percentile
+    raw_power_pool: list[float]       # sorted; for the final percentile pass
 
 
 def _build_baseline_from_rows(rows) -> PowerBaseline:
@@ -153,6 +161,13 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
         d = max(float(r["deaths"] or 0.0), 1.0)
         kda.append((float(r["kills"] or 0) + float(r["assists"] or 0)) / d)
         hero.append(float(r["hero_damage"] or 0))
+        # Specialist metrics — filter zeros below. Most heroes don't
+        # soak / heal / CC / siege at all (Jaina has 0 soak, Kael has
+        # 0 healing), so leaving zeros in the baseline gives non-
+        # specialists a free percentile of ~0.7 just for being one of
+        # the many zeros at the bottom of the sort. We only learn
+        # something useful from the percentile when comparing real
+        # contributions to other real contributions.
         siege.append(float(r["siege_damage"] or 0))
         struct.append(float(r["structure_damage"] or 0))
         heal.append(float(r["healing"] or 0))
@@ -161,8 +176,57 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
         cc.append(float(r["cc"] or 0))
         deaths.append(float(r["deaths"] or 0))
         wr.append(1.0 if int(r["result"] or 0) == 1 else 0.0)
+
+    # Drop zero entries from specialist baselines so non-specialists
+    # naturally bisect to percentile 0 on those metrics (no false
+    # credit) while real specialists rank against each other only.
+    siege  = [v for v in siege  if v > 0]
+    struct = [v for v in struct if v > 0]
+    heal   = [v for v in heal   if v > 0]
+    soak   = [v for v in soak   if v > 0]
+    cc     = [v for v in cc     if v > 0]
+
     for lst in (hero, siege, struct, heal, soak, xp, cc, kda, deaths, wr):
         lst.sort()
+    base = PowerBaseline(
+        hero_damage=hero,
+        siege_damage=siege,
+        structure_damage=struct,
+        healing=heal,
+        damage_soaked=soak,
+        xp=xp,
+        cc=cc,
+        kda=kda,
+        deaths=deaths,
+        win_rates_per_match=wr,
+        raw_power_pool=[],
+    )
+
+    # Second pass: compute the raw weighted score for every per-match
+    # sample in the baseline, sorted, so the final ``power_score``
+    # call can re-percentile-rank itself. Without this pool the score
+    # is just a weighted average — fine, but it loses the "percentile
+    # of percentiles" interpretation the user wants.
+    raw_pool: list[float] = []
+    for r in rows:
+        d = max(float(r["deaths"] or 0.0), 1.0)
+        raw_pool.append(_raw_power(
+            baseline=base,
+            win_rate=1.0 if int(r["result"] or 0) == 1 else 0.0,
+            avg_k=float(r["kills"] or 0),
+            avg_d=float(r["deaths"] or 0),
+            avg_a=float(r["assists"] or 0),
+            avg_hero_dmg=float(r["hero_damage"] or 0),
+            avg_siege_dmg=float(r["siege_damage"] or 0),
+            avg_structure_dmg=float(r["structure_damage"] or 0),
+            avg_healing=float(r["healing"] or 0),
+            avg_dmg_soaked=float(r["damage_soaked"] or 0),
+            avg_xp=float(r["xp"] or 0),
+            avg_cc=float(r["cc"] or 0),
+        ))
+    raw_pool.sort()
+    # Replace the placeholder. We rebuild the dataclass because it's
+    # frozen — cheap, all the underlying lists are shared by reference.
     return PowerBaseline(
         hero_damage=hero,
         siege_damage=siege,
@@ -174,6 +238,7 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
         kda=kda,
         deaths=deaths,
         win_rates_per_match=wr,
+        raw_power_pool=raw_pool,
     )
 
 
@@ -205,6 +270,69 @@ _POWER_WEIGHTS: dict[str, float] = {
 }
 
 
+def _raw_power(
+    *,
+    baseline: PowerBaseline,
+    win_rate: float,
+    avg_k: float,
+    avg_d: float,
+    avg_a: float,
+    avg_hero_dmg: float,
+    avg_siege_dmg: float,
+    avg_structure_dmg: float,
+    avg_healing: float,
+    avg_dmg_soaked: float,
+    avg_xp: float,
+    avg_cc: float,
+) -> float:
+    """Stage 1: weighted-average percentile across the metrics the
+    player actually contributed to. 0..100.
+
+    Specialist metrics (soak / heal / siege / struct / cc) only count
+    when the player actually contributed on that axis. If a metric is
+    skipped (value 0), its weight is *redistributed* across the
+    metrics the player did contribute to, so a pure assassin with
+    high damage / KDA can still hit 100 instead of being capped
+    around 73 just for never healing.
+    """
+    kda = (avg_k + avg_a) / max(avg_d, 1.0)
+
+    parts: list[tuple[float, float]] = [
+        (_POWER_WEIGHTS["win_rate"],
+         _percentile_in(baseline.win_rates_per_match, win_rate)),
+        (_POWER_WEIGHTS["kda"], _percentile_in(baseline.kda, kda)),
+        (_POWER_WEIGHTS["hero_damage"],
+         _percentile_in(baseline.hero_damage, avg_hero_dmg)),
+        (_POWER_WEIGHTS["experience"],
+         _percentile_in(baseline.xp, avg_xp)),
+        # Lower deaths = higher score.
+        (_POWER_WEIGHTS["deaths_inverse"],
+         1.0 - _percentile_in(baseline.deaths, avg_d)),
+    ]
+
+    # Specialist metrics: include only if the player contributed.
+    if avg_siege_dmg > 0:
+        parts.append((_POWER_WEIGHTS["siege_damage"],
+                      _percentile_in(baseline.siege_damage, avg_siege_dmg)))
+    if avg_structure_dmg > 0:
+        parts.append((_POWER_WEIGHTS["structure_damage"],
+                      _percentile_in(baseline.structure_damage, avg_structure_dmg)))
+    if avg_healing > 0:
+        parts.append((_POWER_WEIGHTS["healing"],
+                      _percentile_in(baseline.healing, avg_healing)))
+    if avg_dmg_soaked > 0:
+        parts.append((_POWER_WEIGHTS["damage_soaked"],
+                      _percentile_in(baseline.damage_soaked, avg_dmg_soaked)))
+    if avg_cc > 0:
+        parts.append((_POWER_WEIGHTS["cc"],
+                      _percentile_in(baseline.cc, avg_cc)))
+
+    if not parts:
+        return 0.0
+    total_weight = sum(w for w, _ in parts)
+    return sum(w * p for w, p in parts) / total_weight * 100.0
+
+
 def power_score(
     *,
     baseline: PowerBaseline,
@@ -220,44 +348,36 @@ def power_score(
     avg_xp: float,
     avg_cc: float,
 ) -> float:
-    """0..100 composite score, percentile-ranked vs ``baseline``.
+    """Final 0..100 combat-power score.
 
-    Designed to be called from any context that has a per-player or
-    per-hero average — the leaderboard, the hero ranking dialog, and
-    eventually the BP popup cards. All inputs are *averages over
-    matches*; the function does no aggregation.
+    Two-stage:
+    1. Compute a raw weighted-average percentile (:func:`_raw_power`).
+    2. Look that raw value up in the baseline's pool of raw values
+       (every per-match sample) and return its percentile rank * 100.
+
+    The second stage means the displayed score is "you beat X% of all
+    observed performances" — easy to read, robust to any single
+    metric being extreme, and naturally squashes the long tail at
+    both ends.
     """
-    kda = (avg_k + avg_a) / max(avg_d, 1.0)
-    score = 0.0
-    score += _POWER_WEIGHTS["win_rate"] * _percentile_in(
-        baseline.win_rates_per_match, win_rate
+    raw = _raw_power(
+        baseline=baseline,
+        win_rate=win_rate,
+        avg_k=avg_k, avg_d=avg_d, avg_a=avg_a,
+        avg_hero_dmg=avg_hero_dmg,
+        avg_siege_dmg=avg_siege_dmg,
+        avg_structure_dmg=avg_structure_dmg,
+        avg_healing=avg_healing,
+        avg_dmg_soaked=avg_dmg_soaked,
+        avg_xp=avg_xp,
+        avg_cc=avg_cc,
     )
-    score += _POWER_WEIGHTS["kda"] * _percentile_in(baseline.kda, kda)
-    score += _POWER_WEIGHTS["hero_damage"] * _percentile_in(
-        baseline.hero_damage, avg_hero_dmg
-    )
-    score += _POWER_WEIGHTS["siege_damage"] * _percentile_in(
-        baseline.siege_damage, avg_siege_dmg
-    )
-    score += _POWER_WEIGHTS["structure_damage"] * _percentile_in(
-        baseline.structure_damage, avg_structure_dmg
-    )
-    score += _POWER_WEIGHTS["healing"] * _percentile_in(
-        baseline.healing, avg_healing
-    )
-    score += _POWER_WEIGHTS["damage_soaked"] * _percentile_in(
-        baseline.damage_soaked, avg_dmg_soaked
-    )
-    score += _POWER_WEIGHTS["experience"] * _percentile_in(
-        baseline.xp, avg_xp
-    )
-    score += _POWER_WEIGHTS["cc"] * _percentile_in(baseline.cc, avg_cc)
-    # Deaths: lower is better. Percentile in raw deaths gives "how many
-    # of the population die >= as much as me" if we flip the sign.
-    score += _POWER_WEIGHTS["deaths_inverse"] * (
-        1.0 - _percentile_in(baseline.deaths, avg_d)
-    )
-    return score * 100.0
+    if not baseline.raw_power_pool:
+        # No baseline yet (we're inside _build_baseline_from_rows
+        # itself, computing the pool). Return raw so the second-stage
+        # data set can be assembled.
+        return raw
+    return _percentile_in(baseline.raw_power_pool, raw) * 100.0
 
 
 def _score_population(
