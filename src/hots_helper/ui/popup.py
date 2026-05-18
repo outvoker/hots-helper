@@ -57,10 +57,8 @@ from ..i18n import on_change as on_lang_change, t
 from ..lookup import PlayerSummary, lookup_players
 from ..maps import all_maps
 from ..player_rank import (
-    BOARD_BEST_OPPONENT,
-    BOARD_WORST_TEAMMATE,
     PlayerRankRow,
-    compute_board,
+    compute_player_rankings,
 )
 from ..talent_names import talent_label
 from .macos_overlay import make_overlay_floating
@@ -1036,34 +1034,47 @@ class PopupWindow(QWidget):
 
     # --- leaderboard-driven highlight ---------------------------------------
 
-    def _refresh_rank_indices(self) -> None:
-        """Recompute the worst-teammate / strongest-opponent indices.
+    # How extreme the player has to be on the global power ranking
+    # before we light up their card. 25-th and 75-th percentile cuts
+    # — strong enough to be a real signal without flagging every game.
+    _BP_FLAG_LOW_PCT = 0.25
+    _BP_FLAG_HIGH_PCT = 0.75
 
-        Called once per ``_run_analysis`` pass so the flag on each card
-        reflects the latest DB state (a freshly ingested replay may
-        bump someone onto or off the board). We use a generous top-30
-        so even mid-pack bad players get a heads-up; below that, sample
-        sizes get noisy and the flag is more annoying than useful.
+    def _refresh_rank_indices(self) -> None:
+        """Recompute the global power ranking once per analysis pass.
+
+        Stored as a ``{toon_handle: PlayerRankRow}`` dict so the per-
+        card flag check is O(1). The dict is the *whole* board; the
+        flag logic in ``_apply_flag`` decides whether a hit in the
+        bottom quartile (ally cards) or top quartile (enemy cards)
+        is loud enough to warn about.
         """
         try:
-            worst = compute_board(
-                self.store, BOARD_WORST_TEAMMATE,
-                min_games=5, limit=30,
-            )
-            best = compute_board(
-                self.store, BOARD_BEST_OPPONENT,
-                min_games=5, limit=30,
+            ranked = compute_player_rankings(
+                self.store, min_games=5, limit=500,
             )
         except Exception:
-            # Database hiccups shouldn't bring down the whole BP flow —
-            # the flag is a nice-to-have, not load-bearing.
-            worst, best = [], []
-        self._worst_by_handle: dict[str, PlayerRankRow] = {
-            p.toon_handle: p for p in worst if p.toon_handle
+            # DB hiccups shouldn't tank the whole BP flow — the flag
+            # is a nice-to-have, not load-bearing.
+            ranked = []
+        # Sort by power descending so position N in the list ≈
+        # the player's rank within all observed handles.
+        ranked = sorted(ranked, key=lambda p: -p.power)
+        self._ranked_by_handle: dict[str, PlayerRankRow] = {
+            p.toon_handle: PlayerRankRow(**{**p.__dict__, "rank": i + 1})
+            for i, p in enumerate(ranked) if p.toon_handle
         }
-        self._best_by_handle: dict[str, PlayerRankRow] = {
-            p.toon_handle: p for p in best if p.toon_handle
-        }
+        self._ranked_total = len(ranked)
+        if self._ranked_total > 0:
+            self._high_threshold_rank = max(
+                1, int(self._ranked_total * (1.0 - self._BP_FLAG_HIGH_PCT))
+            )
+            self._low_threshold_rank = max(
+                1, int(self._ranked_total * (1.0 - self._BP_FLAG_LOW_PCT))
+            )
+        else:
+            self._high_threshold_rank = 0
+            self._low_threshold_rank = 0
 
     def _apply_flag(
         self,
@@ -1072,35 +1083,48 @@ class PopupWindow(QWidget):
         *,
         side: str,
     ) -> None:
-        """Light up ``card`` if its handle matches the relevant board.
+        """Light up ``card`` based on the player's global power rank.
 
-        ``side`` is ``"ally"`` (check worst-teammate board) or
-        ``"enemy"`` (check strongest-opponent board). When the same
-        display name resolves to multiple handles we pick the
-        worst-ranked match — the flag is meant as a "do something
-        about this" warning.
+        Ally cards (``side="ally"``) flag the bottom 25% of the
+        ranking (low-power teammates → red); enemy cards
+        (``side="enemy"``) flag the top 25% (high-power opponents →
+        gold). When the same display name resolves to multiple
+        handles, we pick the most extreme one in the relevant
+        direction.
         """
-        if not summaries:
+        if not summaries or not getattr(self, "_ranked_total", 0):
             card.set_flag("", 0, 0, 0.0)
             return
-        index = self._worst_by_handle if side == "ally" else self._best_by_handle
-        kind = "worst" if side == "ally" else "best"
-        best_match: PlayerRankRow | None = None
-        for s in summaries:
-            hit = index.get(s.toon_handle)
-            if hit is None:
-                continue
-            # Lower rank number = higher position on the board.
-            if best_match is None or hit.rank < best_match.rank:
-                best_match = hit
-        if best_match is None:
+
+        index = self._ranked_by_handle
+        candidates: list[PlayerRankRow] = [
+            index[s.toon_handle]
+            for s in summaries
+            if s.toon_handle in index
+        ]
+        if not candidates:
             card.set_flag("", 0, 0, 0.0)
             return
+
+        if side == "ally":
+            # Worst (highest rank number) = most likely to drag us down.
+            chosen = max(candidates, key=lambda p: p.rank)
+            if chosen.rank <= self._low_threshold_rank:
+                card.set_flag("", 0, 0, 0.0)
+                return
+            kind = "worst"
+        else:
+            # Best (lowest rank number) = scariest.
+            chosen = min(candidates, key=lambda p: p.rank)
+            if chosen.rank > self._high_threshold_rank:
+                card.set_flag("", 0, 0, 0.0)
+                return
+            kind = "best"
         card.set_flag(
             kind=kind,
-            rank=best_match.rank,
-            games=best_match.games,
-            win_rate=best_match.win_rate,
+            rank=chosen.rank,
+            games=chosen.games,
+            win_rate=chosen.win_rate,
         )
 
     def _refresh_bans(self) -> None:
@@ -1228,7 +1252,7 @@ class PopupWindow(QWidget):
         # If the rank index hasn't been built yet (e.g. user re-queried
         # a single card before opening the popup via the BP flow), do
         # it now so the flag check has data to work with.
-        if not hasattr(self, "_worst_by_handle"):
+        if not hasattr(self, "_ranked_by_handle"):
             self._refresh_rank_indices()
         self._apply_flag(card, summaries, side=side)
         # A single-card correction may shift the ban list (any side change

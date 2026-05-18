@@ -1,22 +1,7 @@
-"""Cross-game player rankings — four boards keyed on "playing with us"
-vs "playing against us", each ordered by Wilson lower bound on win-rate.
-
-Boards:
-
-* ``worst_teammate``   — lowest WR when on our team
-* ``best_teammate``    — highest WR when on our team
-* ``best_opponent``    — highest WR when on the enemy team (i.e. they
-                         beat us a lot — boogeymen)
-* ``worst_opponent``   — lowest WR when on the enemy team (free wins)
-
-Squad-side detection is a heuristic (anyone with ≥20 games of replay
-history is treated as one of us, since random matchmaking opponents
-almost never reappear that often). The boards exclude the squad
-itself.
-
-The four boards use raw WR sorting only as a tiebreaker; the primary
-key is Wilson 95% lower bound so a 1-game 100% streak can't lead any
-chart.
+"""Cross-game player rankings — one board over every player who has
+shared a match with the squad, scored on a composite combat-power
+metric. The dialog (and the BP popup) does its own sort; this
+module only computes the rows.
 """
 
 from __future__ import annotations
@@ -26,22 +11,6 @@ from dataclasses import dataclass
 
 from .db import Store
 from .stats import wilson_lower_bound
-
-
-# Board identifiers used by the dialog dropdown and the BP popup
-# highlighter. Kept in one place so adding a fifth board (say,
-# "highest avg damage") is one edit.
-BOARD_WORST_TEAMMATE = "worst_teammate"
-BOARD_BEST_TEAMMATE = "best_teammate"
-BOARD_BEST_OPPONENT = "best_opponent"
-BOARD_WORST_OPPONENT = "worst_opponent"
-
-ALL_BOARDS = (
-    BOARD_WORST_TEAMMATE,
-    BOARD_BEST_TEAMMATE,
-    BOARD_BEST_OPPONENT,
-    BOARD_WORST_OPPONENT,
-)
 
 
 @dataclass(frozen=True)
@@ -101,14 +70,6 @@ def _row_to_rank(row, *, rank: int) -> PlayerRankRow:
     )
 
 
-# Sort modes the dialog dropdown can pick. Default is "wlb"
-# (Wilson lower bound on win-rate, the original behaviour); "power"
-# adds a composite combat-rating score across multiple stats.
-SORT_WLB = "wlb"
-SORT_POWER = "power"
-ALL_SORTS = (SORT_WLB, SORT_POWER)
-
-
 def _percentile_in(sorted_pop: list[float], v: float) -> float:
     """Percentile rank of ``v`` in a pre-sorted population, in 0..1.
 
@@ -131,6 +92,11 @@ _HEAL_THRESHOLD   = 1_000
 _SOAK_THRESHOLD   = 5_000
 _TAKEN_THRESHOLD  = 30_000
 _CC_THRESHOLD     = 1.0
+# Mirrors db.store._METRIC_SANITY_MAX. Some replays record uint32
+# overflow sentinels (~4.29G) for cumulative-damage fields; we reject
+# anything above 10M from the baseline so it can't poison percentile
+# scoring. Real per-match values top out around 250k.
+_SANITY_MAX = 10_000_000.0
 
 
 @dataclass(frozen=True)
@@ -188,12 +154,19 @@ def _build_baseline_from_rows(rows) -> PowerBaseline:
     # A 500-healing self-leech assassin shouldn't be treated as a
     # healer, and "everyone takes some damage" shouldn't make every
     # hero's damage_taken percentile useful — only real frontliners.
-    siege  = [v for v in siege  if v > _SIEGE_THRESHOLD]
-    struct = [v for v in struct if v > _STRUCT_THRESHOLD]
-    heal   = [v for v in heal   if v > _HEAL_THRESHOLD]
-    soak   = [v for v in soak   if v > _SOAK_THRESHOLD]
-    taken  = [v for v in taken  if v > _TAKEN_THRESHOLD]
-    cc     = [v for v in cc     if v > _CC_THRESHOLD]
+    # Upper bound _SANITY_MAX rejects uint32-overflow sentinels
+    # (~4.29G) that show up in rare replays — they'd otherwise
+    # dominate every percentile baseline.
+    siege  = [v for v in siege  if _SIEGE_THRESHOLD  < v < _SANITY_MAX]
+    struct = [v for v in struct if _STRUCT_THRESHOLD < v < _SANITY_MAX]
+    heal   = [v for v in heal   if _HEAL_THRESHOLD   < v < _SANITY_MAX]
+    soak   = [v for v in soak   if _SOAK_THRESHOLD   < v < _SANITY_MAX]
+    taken  = [v for v in taken  if _TAKEN_THRESHOLD  < v < _SANITY_MAX]
+    cc     = [v for v in cc     if _CC_THRESHOLD     < v < _SANITY_MAX]
+    # Hero damage and XP get only the upper sanity bound; lower bound
+    # is meaningless (every hero deals some damage / earns some XP).
+    hero = [v for v in hero if v < _SANITY_MAX]
+    xp   = [v for v in xp   if v < _SANITY_MAX]
 
     for lst in (hero, siege, struct, heal, soak, taken, xp, cc, kda, deaths, wr):
         lst.sort()
@@ -424,115 +397,33 @@ def _score_population(
     return out
 
 
-def _sort_and_rerank(
-    scored: list[PlayerRankRow],
-    *,
-    direction: str,
-    sort_mode: str,
-    limit: int,
-) -> list[PlayerRankRow]:
-    """Sort ``scored`` and slice to ``limit``, then renumber ranks.
-
-    ``sort_mode`` picks the primary key:
-    * ``SORT_WLB``   — Wilson 95% LB, then raw WR, then games, then KDA.
-    * ``SORT_POWER`` — composite power score, with WLB as tiebreaker.
-
-    ``direction`` is ``"asc"`` for the worst-of boards and ``"desc"``
-    for the best-of boards. Tiebreakers flip with the direction so a
-    "worst" board breaks ties on the same direction.
-    """
-    if sort_mode == SORT_POWER:
-        if direction == "asc":
-            key = lambda p: (p.power, p.wilson_lb, p.win_rate, -p.games)
-        else:
-            key = lambda p: (-p.power, -p.wilson_lb, -p.win_rate, -p.games)
-    else:
-        if direction == "asc":
-            key = lambda p: (p.wilson_lb, p.win_rate, -p.games, p.kda)
-        else:
-            key = lambda p: (-p.wilson_lb, -p.win_rate, -p.games, -p.kda)
-    scored = sorted(scored, key=key)
-    return [
-        PlayerRankRow(**{**p.__dict__, "rank": i + 1})
-        for i, p in enumerate(scored[:limit])
-    ]
-
-
-def compute_board(
+def compute_player_rankings(
     store: Store,
-    board: str,
     *,
     min_games: int = 5,
-    limit: int = 10,
-    sort_mode: str = SORT_WLB,
+    limit: int = 500,
     baseline: PowerBaseline | None = None,
 ) -> list[PlayerRankRow]:
-    """Compute one of :data:`ALL_BOARDS`.
+    """Return every player who has shared a match with the squad.
 
-    Both teammate boards share an underlying SQL query (filtered by
-    ``team = our_team``) and just sort opposite directions; the
-    opponent boards do the same with ``team != our_team``. We keep
-    them as separate calls so the caller can render only what the
-    dropdown currently asks for, with no wasted aggregation.
-
-    ``sort_mode`` controls the primary sort key — see
-    :func:`_sort_and_rerank`. The composite power score is always
-    computed (it's cheap) using either the provided ``baseline`` or
-    a freshly-built one, so switching modes in the UI doesn't
-    require re-querying the DB. Callers that score multiple boards
-    in one shot should pass a shared baseline.
+    Rows come back in arbitrary order — the caller (the dialog or the
+    BP popup) decides the sort, since the table headers are now
+    click-to-sort and the BP highlight is "is this player anywhere
+    in the top/bottom by power?". ``rank`` is filled in the order
+    the SQL returns rows; the dialog overrides it after sorting.
     """
-    if board not in ALL_BOARDS:
-        raise ValueError(f"unknown board: {board!r}")
-    if sort_mode not in ALL_SORTS:
-        raise ValueError(f"unknown sort_mode: {sort_mode!r}")
-
     squad = tuple(store.squad_handles())
     if not squad:
         return []
 
-    side = "teammate" if "teammate" in board else "opponent"
-    direction = "asc" if board.startswith("worst_") else "desc"
-
-    rows = store.player_rankings_vs_squad(
+    rows = store.player_rankings_seen(
         squad,
-        side=side,
         min_games=min_games,
-        # Pull a generous slice so the post-sort still has enough
-        # signal even when the SQL ORDER BY (games desc) doesn't
-        # match either direction we care about.
-        limit=max(limit * 6, 200),
+        limit=limit,
     )
     if not rows:
         return []
-    scored = [_row_to_rank(r, rank=0) for r in rows]
     if baseline is None:
         baseline = build_power_baseline(store)
-    scored = _score_population(scored, baseline)
-    return _sort_and_rerank(
-        scored,
-        direction=direction,
-        sort_mode=sort_mode,
-        limit=limit,
-    )
-
-
-def highlight_indices(
-    store: Store,
-    *,
-    top_n: int = 30,
-    min_games: int = 5,
-) -> dict[str, dict[str, PlayerRankRow]]:
-    """Per-board ``{toon_handle: PlayerRankRow}`` dicts for fast lookup.
-
-    The BP popup uses two of these (worst teammate / best opponent) to
-    flag player cards. Returning all four keeps the API symmetric
-    even though the popup highlight is currently only on the two
-    "danger" boards.
-    """
-    return {
-        board: {p.toon_handle: p for p in compute_board(
-            store, board, min_games=min_games, limit=top_n,
-        ) if p.toon_handle}
-        for board in ALL_BOARDS
-    }
+    scored = [_row_to_rank(r, rank=i + 1) for i, r in enumerate(rows)]
+    return _score_population(scored, baseline)

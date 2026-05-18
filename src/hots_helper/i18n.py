@@ -396,6 +396,10 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "{board} · {count} 人 · 最少 {min_games} 局起算",
         "en": "{board} · {count} player(s) · {min_games}+ games",
     },
+    "ui.rank.summary_total": {
+        "zh": "共 {count} 名玩家 · 最少 {min_games} 局起算 · 点击列名切换排序",
+        "en": "{count} player(s) · {min_games}+ games · click any column header to sort",
+    },
     "ui.rank.footer": {
         "zh": "<span style='color:#888;'>"
               "排序按 Wilson 95% 置信下界（避免 1 局 100% 上榜）。"
@@ -404,6 +408,16 @@ _translations: dict[str, dict[str, str]] = {
         "en": "<span style='color:#888;'>"
               "Sorted by Wilson 95% lower bound on win rate (so a 1-game streak can't top the chart). "
               "Players on this board are highlighted when they show up in BP analysis."
+              "</span>",
+    },
+    "ui.rank.footer_single": {
+        "zh": "<span style='color:#888;'>"
+              "战斗力 = 胜率 + KDA + 输出 + 推塔 + 治疗 + 硬币 + 经验 等多维加权后的综合百分位。"
+              "BP 分析时，战斗力较低的我方槽位会标红，较高的敌方槽位会标金。"
+              "</span>",
+        "en": "<span style='color:#888;'>"
+              "Power = a percentile rank over a weighted blend of WR, KDA, damage, structure, healing, soak, XP, etc. "
+              "BP analysis flags low-power ally slots in red and high-power enemy slots in gold."
               "</span>",
     },
     "ui.rank.col_rank":     {"zh": "#",       "en": "#"},

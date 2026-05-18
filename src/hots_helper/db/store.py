@@ -48,25 +48,43 @@ _METRIC_CONTRIB_THRESHOLDS: dict[str, int] = {
 }
 
 
+# Upper sanity bound for any per-match cumulative metric. Some
+# replays (notably old Abathur / Gall games) record a uint32 overflow
+# sentinel like 4294967295 in damage_soaked or healing; those values
+# poison every average if not filtered. A real game's per-player soak
+# tops out around 250k, so 10 million is a safe cliff that throws
+# away the sentinels without clipping any real performances.
+_METRIC_SANITY_MAX = 10_000_000
+
+
 def _avg_when(metric: str, *, alias: str) -> str:
     """Build a SQL fragment that averages ``pm.<metric>`` only over
-    matches where the contribution clears the role threshold.
+    matches where the contribution clears the role threshold and
+    falls below :data:`_METRIC_SANITY_MAX`.
 
     Returns ``"… AS <alias>"`` so callers drop it straight into a
-    SELECT clause. Outside the threshold table the metric is averaged
-    plainly — most metrics (kills, hero_damage, …) every hero scores
-    on, so threshold gating would just throw away signal.
+    SELECT clause. Metrics without a configured threshold get a
+    plain ``AVG`` — most stats (kills, hero_damage, …) every hero
+    scores on, so threshold gating would just throw away signal.
     """
     threshold = _METRIC_CONTRIB_THRESHOLDS.get(metric)
     if threshold is None:
-        return f"AVG(pm.{metric}) AS {alias}"
+        # Still apply the sanity bound — uint32 sentinels can show up
+        # in any cumulative-damage field, not just the threshold-gated
+        # ones.
+        return (
+            f"AVG(CASE WHEN pm.{metric} < {_METRIC_SANITY_MAX} "
+            f"         THEN pm.{metric} END) AS {alias}"
+        )
     # NULLIF(..., 0) returns NULL for the no-contribution case; SQLite
     # then propagates NULL through divide which we coalesce to 0 in
     # the result-row fetcher.
     return (
         f"SUM(CASE WHEN pm.{metric} > {threshold} "
+        f"          AND  pm.{metric} < {_METRIC_SANITY_MAX} "
         f"          THEN pm.{metric} ELSE 0 END) * 1.0 / "
         f"NULLIF(SUM(CASE WHEN pm.{metric} > {threshold} "
+        f"                AND  pm.{metric} < {_METRIC_SANITY_MAX} "
         f"               THEN 1 ELSE 0 END), 0) AS {alias}"
     )
 
@@ -632,6 +650,67 @@ class Store:
         ).fetchall()
 
     # --- player rankings ----------------------------------------------------
+
+    def player_rankings_seen(
+        self,
+        squad_handles: tuple[str, ...],
+        *,
+        min_games: int = 5,
+        limit: int = 500,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+    ) -> list[sqlite3.Row]:
+        """Per-player aggregate over every match the squad played in.
+
+        No team-side filter — the row counts cover both ally and enemy
+        appearances, so ``games`` is "how many of our matches you
+        showed up in" and ``wins`` is "how many of those YOU won
+        (your team won, regardless of whether that was our team)".
+        Use this when the leaderboard doesn't care about side.
+        """
+        if not squad_handles:
+            return []
+
+        clause, mode_params = _mode_clause(mode_filter)
+        squad_placeholders = ",".join("?" for _ in squad_handles)
+        return self.conn.execute(
+            f"""
+            SELECT pm.toon_handle,
+                   COALESCE(p.display_name, MAX(pm.display_name)) AS display_name,
+                   COUNT(*) AS games,
+                   SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
+                   AVG(pm.kills)            AS avg_k,
+                   AVG(pm.deaths)           AS avg_d,
+                   AVG(pm.assists)          AS avg_a,
+                   AVG(pm.hero_damage)      AS avg_hero_dmg,
+                   {_avg_when("siege_damage",        alias="avg_siege_dmg")},
+                   {_avg_when("structure_damage",    alias="avg_structure_dmg")},
+                   {_avg_when("healing",             alias="avg_healing")},
+                   {_avg_when("damage_taken",        alias="avg_dmg_taken")},
+                   {_avg_when("damage_soaked",       alias="avg_dmg_soaked")},
+                   AVG(pm.experience_contribution) AS avg_xp,
+                   {_avg_when("time_cc_enemy_heroes", alias="avg_cc")},
+                   MAX(r.played_at)         AS last_seen_at
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            LEFT JOIN players p ON p.toon_handle = pm.toon_handle
+            WHERE pm.replay_id IN (
+                SELECT replay_id
+                FROM player_match
+                WHERE toon_handle IN ({squad_placeholders})
+            )
+            {clause}
+            GROUP BY pm.toon_handle
+            HAVING COUNT(*) >= ?
+            ORDER BY games DESC
+            LIMIT ?
+            """,
+            (
+                *squad_handles,
+                *mode_params,
+                min_games,
+                limit,
+            ),
+        ).fetchall()
 
     def player_rankings_vs_squad(
         self,

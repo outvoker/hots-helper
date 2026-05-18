@@ -33,6 +33,26 @@ from ..player_rank import build_power_baseline, power_score
 from ..stats import wilson_lower_bound
 
 
+class _NumericItem(QTableWidgetItem):
+    """Table cell that displays a formatted string but sorts numerically.
+
+    Qt's default ``QTableWidgetItem`` sorts by display text, so "12.3k"
+    ends up adjacent to "120" lexicographically. We override ``__lt__``
+    to compare an attached numeric ``sort_value`` instead. ``None``
+    falls back to text comparison (used for the hero name column).
+    """
+
+    def __init__(self, text: str, sort_value=None) -> None:
+        super().__init__(text)
+        self._sort_value = sort_value
+
+    def __lt__(self, other: "QTableWidgetItem") -> bool:  # type: ignore[override]
+        if isinstance(other, _NumericItem) and self._sort_value is not None \
+                and other._sort_value is not None:
+            return self._sort_value < other._sort_value
+        return super().__lt__(other)
+
+
 def _fmt_k(value: float) -> str:
     if value >= 10_000:
         return f"{value/1000:.0f}k"
@@ -107,23 +127,10 @@ class HeroRankingDialog(QDialog):
         self.min_games_spin.valueChanged.connect(self._reload)
         header.addWidget(self.min_games_spin)
 
-        self.sort_label = QLabel()
-        header.addWidget(self.sort_label)
-        self.sort_combo = QComboBox()
-        # Power ("composite combat rating") is first so it's the
-        # default — it's the multi-metric synthesis the user came
-        # here for. WLB and raw WR are still one click away.
-        self.sort_combo.addItem("", "power")
-        self.sort_combo.addItem("", "wlb")
-        self.sort_combo.addItem("", "wr")
-        self.sort_combo.addItem("", "games")
-        self.sort_combo.addItem("", "hero")
-        self.sort_combo.currentIndexChanged.connect(self._reload)
-        header.addWidget(self.sort_combo)
-
-        # Tiny "?" button next to the sort dropdown — opens the
-        # power score help window. Same affordance shows up on the
-        # player rank dialog so the help text lives in one place.
+        # Sort is now driven by clicking the column headers —
+        # QTableWidget.setSortingEnabled below. The ? button still
+        # opens the combat-power help so users can see what each
+        # column is.
         self.power_help_btn = QPushButton("?")
         self.power_help_btn.setFixedWidth(28)
         self.power_help_btn.setToolTip(t("ui.power_help.btn_tip"))
@@ -158,11 +165,16 @@ class HeroRankingDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
-        self.table.setSortingEnabled(False)
+        # Click any column header to sort. Numeric columns store their
+        # value via setData(EditRole), so the sort is by magnitude
+        # rather than lexicographic over the formatted strings.
+        self.table.setSortingEnabled(True)
 
         # Column header keys; the labels are filled in via _retranslate.
+        # Rank shown via Qt's vertical header on the left (auto-updates
+        # on column-click sort), so no dedicated rank column.
         self._column_keys = [
-            "ui.aram.col_rank", "ui.aram.col_hero",
+            "ui.aram.col_hero",
             "ui.rank.col_power",
             "ui.aram.col_games", "ui.aram.col_wins",
             "ui.aram.col_wr", "ui.aram.col_wlb",
@@ -176,9 +188,14 @@ class HeroRankingDialog(QDialog):
             self.table.horizontalHeader().setSectionResizeMode(
                 i, QHeaderView.ResizeToContents
             )
+        # Hero name column gets the leftover space.
         self.table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.Stretch
+            0, QHeaderView.Stretch
         )
+        # Default sort: combat power, descending. Power is at column 1
+        # (after hero name) now that the rank column is gone.
+        self.table.sortByColumn(1, Qt.DescendingOrder)
+        self.table.verticalHeader().setVisible(True)
         root.addWidget(self.table, 1)
 
         self.footer_label = QLabel()
@@ -227,20 +244,6 @@ class HeroRankingDialog(QDialog):
         for i, (value, key) in enumerate(_MODES):
             self.mode_combo.setItemText(i, t(key))
         self.min_games_label.setText(t("ui.aram.min_games"))
-        self.sort_label.setText(t("ui.aram.sort"))
-        # Sort combo items
-        sort_keys = {
-            "wr": "ui.aram.sort_wr",
-            "wlb": "ui.aram.sort_wlb",
-            "power": "ui.aram.sort_power",
-            "games": "ui.aram.sort_games",
-            "hero": "ui.aram.sort_hero",
-        }
-        for i in range(self.sort_combo.count()):
-            key = sort_keys.get(self.sort_combo.itemData(i), "")
-            if key:
-                self.sort_combo.setItemText(i, t(key))
-        self.sort_combo.setToolTip(t("ui.aram.sort_tip"))
         self.close_btn.setText(t("ui.aram.close"))
         self.search_label.setText(t("ui.aram.search_label"))
         self.search_edit.setPlaceholderText(t("ui.aram.search_placeholder"))
@@ -360,17 +363,9 @@ class HeroRankingDialog(QDialog):
                 "xp": avg_xp,
             })
 
-        sort_key = self.sort_combo.currentData()
-        if sort_key == "wlb":
-            ranked.sort(key=lambda x: -x["wlb"])
-        elif sort_key == "power":
-            ranked.sort(key=lambda x: -x["power"])
-        elif sort_key == "wr":
-            ranked.sort(key=lambda x: -x["wr"])
-        elif sort_key == "games":
-            ranked.sort(key=lambda x: -x["games"])
-        elif sort_key == "hero":
-            ranked.sort(key=lambda x: x["hero"])
+        # No explicit sort — the QTableWidget's sortByColumn() default
+        # (set in _build_ui) orders by power desc; the user can click
+        # any column header to re-sort.
 
         # DB summary row — same map filter applied so the totals match
         # the data we actually charted.
@@ -389,37 +384,46 @@ class HeroRankingDialog(QDialog):
               ranked=len(ranked), min_games=min_games)
         )
 
+        # Disable sorting while populating; otherwise every setItem
+        # call would reshuffle the table. Re-enable after.
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(ranked))
         for i, r in enumerate(ranked):
-            cells = [
-                str(i + 1),
-                r["hero"],
-                f"{r['power']:.0f}",
-                str(r["games"]),
-                str(r["wins"]),
-                f"{r['wr']*100:.0f}%",
-                f"{r['wlb']*100:.0f}%",
-                f"{r['k']:.1f}/{r['d']:.1f}/{r['a']:.1f}",
-                _fmt_k(r["hd"]),
-                _fmt_k(r["dt"]),
-                _fmt_k(r["hl"]),
-                _fmt_k(r["strd"]),
-                _fmt_k(r["soak"]),
-                _fmt_k(r["xp"]),
+            wlb = r["wlb"]
+            if wlb >= 0.50:
+                fg = QColor(120, 220, 120)
+            elif wlb < 0.40:
+                fg = QColor(220, 110, 110)
+            else:
+                fg = QColor(230, 230, 230)
+
+            # (col_idx, formatted_text, numeric_sort_value).
+            # ``None`` for sort_value means "sort by text" (only used
+            # for the hero name column at index 0).
+            specs = [
+                (0,  r["hero"],                                None),
+                (1,  f"{r['power']:.0f}",                      r["power"]),
+                (2,  str(r["games"]),                          r["games"]),
+                (3,  str(r["wins"]),                           r["wins"]),
+                (4,  f"{r['wr']*100:.0f}%",                    r["wr"]),
+                (5,  f"{r['wlb']*100:.0f}%",                   r["wlb"]),
+                (6,  f"{r['k']:.1f}/{r['d']:.1f}/{r['a']:.1f}",
+                                                              (r["k"]+r["a"]) / max(r["d"], 1.0)),
+                (7,  _fmt_k(r["hd"]),                          r["hd"]),
+                (8,  _fmt_k(r["dt"]),                          r["dt"]),
+                (9,  _fmt_k(r["hl"]),                          r["hl"]),
+                (10, _fmt_k(r["strd"]),                        r["strd"]),
+                (11, _fmt_k(r["soak"]),                        r["soak"]),
+                (12, _fmt_k(r["xp"]),                          r["xp"]),
             ]
-            for j, txt in enumerate(cells):
-                item = QTableWidgetItem(txt)
+            for col, text, sort_value in specs:
+                item = _NumericItem(text, sort_value)
                 item.setTextAlignment(
-                    Qt.AlignVCenter | (Qt.AlignLeft if j == 1 else Qt.AlignRight)
+                    Qt.AlignVCenter | (Qt.AlignLeft if col == 0 else Qt.AlignRight)
                 )
-                wlb = r["wlb"]
-                if wlb >= 0.50:
-                    item.setForeground(QColor(120, 220, 120))
-                elif wlb < 0.40:
-                    item.setForeground(QColor(220, 110, 110))
-                else:
-                    item.setForeground(QColor(230, 230, 230))
-                self.table.setItem(i, j, item)
+                item.setForeground(fg)
+                self.table.setItem(i, col, item)
+        self.table.setSortingEnabled(True)
 
         # Re-apply any active search highlight
         self._on_search_changed(self.search_edit.text())
@@ -439,7 +443,7 @@ class HeroRankingDialog(QDialog):
             return []
         out = []
         for row in range(self.table.rowCount()):
-            hero_item = self.table.item(row, 1)
+            hero_item = self.table.item(row, 0)
             if hero_item and q in hero_item.text().lower():
                 out.append(row)
         return out
@@ -463,7 +467,7 @@ class HeroRankingDialog(QDialog):
 
     def _jump_to_row(self, row: int) -> None:
         self.table.scrollToItem(
-            self.table.item(row, 1),
+            self.table.item(row, 0),
             QAbstractItemView.PositionAtCenter,
         )
         self.table.selectRow(row)
