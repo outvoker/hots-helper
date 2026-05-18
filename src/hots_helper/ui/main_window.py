@@ -955,10 +955,11 @@ class MainWindow(QMainWindow):
             return
         self._hotkey_busy = True
         self._log(t("ui.main.capturing_screenshot"))
-        # Show the marketing-y progress card so the user has feedback
-        # during the 1–3 s OCR pipeline. Anchor it to the main window
-        # for now; the popup itself takes over once we have results.
-        self.capture_progress.start(anchor=self)
+        # Hide every helper-owned widget that's currently floating over
+        # the game so it doesn't end up in the captured frame. The
+        # progress dialog is *not* shown yet either — both come back
+        # after the worker emits screenshot_taken.
+        self._hide_helper_overlays_for_capture()
 
         thread = QThread(self)
         worker = HotkeyWorker(sample_path=sample_path)
@@ -966,12 +967,60 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.progress.connect(self._log)
         worker.progress.connect(self.capture_progress.update_substatus)
+        worker.screenshot_taken.connect(self._on_screenshot_taken_bp)
         worker.finished.connect(self._on_hotkey_finished)
         worker.finished.connect(thread.quit)
         thread.finished.connect(self._cleanup_hotkey_thread)
         self._hotkey_thread = thread
         self._hotkey_worker = worker
         thread.start()
+
+    def _hide_helper_overlays_for_capture(self) -> None:
+        """Briefly hide the floating launcher (and any open per-shot
+        popups) so they don't appear in the screenshot. Captured
+        elsewhere because both BP and chat capture flows need it."""
+        self._launcher_was_visible = (
+            self.launcher is not None and self.launcher.isVisible()
+        )
+        if self._launcher_was_visible:
+            self.launcher.hide()
+        # The popup may be open from a previous BP run — hide it so it
+        # doesn't sit half-overlapping the next draft screen.
+        if self.popup is not None and self.popup.isVisible():
+            self._popup_was_visible = True
+            self.popup.hide()
+        else:
+            self._popup_was_visible = False
+        # Same for the chat-translate popup.
+        if (
+            self._chat_trans_popup is not None
+            and self._chat_trans_popup.isVisible()
+        ):
+            self._chat_trans_popup_was_visible = True
+            self._chat_trans_popup.hide()
+        else:
+            self._chat_trans_popup_was_visible = False
+        # Process the pending hide events so the OS actually paints
+        # without the overlays before the worker grabs the frame.
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+
+    def _restore_helper_overlays_after_capture(self) -> None:
+        """Bring the launcher (and previously-visible popups) back.
+        Called from the worker's screenshot_taken signal."""
+        if getattr(self, "_launcher_was_visible", False) and self.launcher is not None:
+            self.launcher.show()
+        if getattr(self, "_chat_trans_popup_was_visible", False) and self._chat_trans_popup is not None:
+            self._chat_trans_popup.show()
+        # Note: the BP popup intentionally stays hidden — it'll be
+        # re-shown by show_for_map() with the new analysis. Same for
+        # the chat popup if a fresh chat capture is replacing it.
+
+    def _on_screenshot_taken_bp(self) -> None:
+        """Worker tells us the BP frame is on disk → show the progress
+        dialog and restore overlays. The flow="bp" script kicks in."""
+        self._restore_helper_overlays_after_capture()
+        self.capture_progress.start(anchor=self, flow="bp")
 
     def _cleanup_hotkey_thread(self) -> None:
         if self._hotkey_worker is not None:
@@ -1036,8 +1085,10 @@ class MainWindow(QMainWindow):
         if self._chat_trans_popup is None:
             self._chat_trans_popup = ChatTranslationPopup()
         self._chat_trans_busy = True
-        self.capture_progress.start(anchor=self, flow="chat")
         self._log(t("ui.main.chat_translate_started"))
+        # Same hide-before-capture pattern as the BP flow so the
+        # launcher / progress card don't end up in the screenshot.
+        self._hide_helper_overlays_for_capture()
 
         thread = QThread(self)
         worker = ChatTranslateWorker(target_lang="zh")
@@ -1045,12 +1096,19 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.progress.connect(self._log)
         worker.progress.connect(self.capture_progress.update_substatus)
+        worker.screenshot_taken.connect(self._on_screenshot_taken_chat)
         worker.finished.connect(self._on_chat_translate_finished)
         worker.finished.connect(thread.quit)
         thread.finished.connect(self._cleanup_chat_translate_thread)
         self._chat_trans_thread = thread
         self._chat_trans_worker = worker
         thread.start()
+
+    def _on_screenshot_taken_chat(self) -> None:
+        """Worker tells us the chat-OCR frame is on disk → show the
+        progress dialog (chat-flavored copy) and restore the launcher."""
+        self._restore_helper_overlays_after_capture()
+        self.capture_progress.start(anchor=self, flow="chat")
 
     def _cleanup_chat_translate_thread(self) -> None:
         if self._chat_trans_worker is not None:

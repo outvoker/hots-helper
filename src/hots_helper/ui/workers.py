@@ -166,6 +166,11 @@ class HotkeyWorker(QObject):
     """
 
     progress = Signal(str)
+    # Emitted as soon as the screenshot is on disk and the helper UI
+    # is safe to redisplay. Lets the main window show the capture
+    # progress dialog and restore the floating launcher *after* the
+    # frame is grabbed instead of letting them slip into the shot.
+    screenshot_taken = Signal()
     finished = Signal(object)  # HotkeyShotResult
 
     def __init__(self, sample_path: Path | None = None) -> None:
@@ -195,17 +200,33 @@ class HotkeyWorker(QObject):
                     f"[1/3 sample load error] {type(e).__name__}: {e}"
                 )
                 log_lines.append(traceback.format_exc())
+            # No real frame was grabbed, but we still want the helper
+            # UI restored so the rest of the pipeline can update it.
+            self.screenshot_taken.emit()
         else:
             self.progress.emit("[1/3] Capturing screenshot…")
             try:
                 from .screenshot import capture_fullscreen
+                # Give the desktop compositor a beat to repaint without
+                # the helper's own overlays (the main window hid them
+                # right before kicking off this worker). 60 ms is a
+                # conservative ~3 frames at 60Hz / 4 frames at 75Hz —
+                # enough to cover slow Windows DWM updates without a
+                # noticeable user-perceived lag.
+                QThread.msleep(60)
                 screenshot_path = capture_fullscreen()
+                # Frame is on disk — UI can come back now without
+                # contaminating subsequent passes.
+                self.screenshot_taken.emit()
                 dt = time.monotonic() - t0
                 log_lines.append(f"[1/3] Screenshot saved in {dt:.1f}s: {screenshot_path}")
                 self.progress.emit(f"[1/3] Screenshot done ({dt:.1f}s)")
             except Exception as e:
                 log_lines.append(f"[1/3 screenshot error] {type(e).__name__}: {e}")
                 log_lines.append(traceback.format_exc())
+                # Restore the helper UI even on capture failure so the
+                # user sees the error popup instead of an invisible app.
+                self.screenshot_taken.emit()
 
         map_name = ""
         allies: list[str] = [""] * 5
@@ -336,6 +357,11 @@ class ChatTranslateWorker(QObject):
     """
 
     progress = Signal(str)
+    # Same role as HotkeyWorker.screenshot_taken — emitted once the
+    # frame is on disk so the main window can re-show its UI without
+    # the launcher chip / progress dialog leaking into the captured
+    # image.
+    screenshot_taken = Signal()
     finished = Signal(object)  # ChatTranslationResult
 
     def __init__(self, target_lang: str = "zh") -> None:
@@ -355,13 +381,18 @@ class ChatTranslateWorker(QObject):
         t0 = time.monotonic()
         self.progress.emit("[1/3] Capturing screen…")
         try:
+            # Same 60ms compositor-settle delay as the BP capture path.
+            QThread.msleep(60)
             screenshot_path = capture_fullscreen()
+            self.screenshot_taken.emit()
             log_lines.append(f"[1/3] Screenshot: {screenshot_path}")
         except Exception as e:
             log_lines.append(
                 f"[1/3 screenshot error] {type(e).__name__}: {e}"
             )
             log_lines.append(traceback.format_exc())
+            # Always restore the UI on error so the user sees feedback.
+            self.screenshot_taken.emit()
             self.finished.emit(ChatTranslationResult(
                 screenshot_path=None,
                 error=f"截图失败：{e}",
