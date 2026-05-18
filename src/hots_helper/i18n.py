@@ -406,6 +406,11 @@ _translations: dict[str, dict[str, str]] = {
     },
     "ui.rank.hero_filter": {"zh": "英雄", "en": "Hero"},
     "ui.rank.hero_all": {"zh": "全部英雄", "en": "All heroes"},
+    "ui.rank.search_label": {"zh": "搜索", "en": "Search"},
+    "ui.rank.search_placeholder": {
+        "zh": "玩家名…",
+        "en": "Player name…",
+    },
     "ui.rank.extras_label": {
         "zh": "★ 我方常驻玩家（{count} 人，独立显示）",
         "en": "★ Squad members ({count}, pinned below)",

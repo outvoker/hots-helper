@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -135,6 +136,17 @@ class PlayerRankDialog(QDialog):
         self.limit_spin.valueChanged.connect(self._render_table)
         head.addWidget(self.limit_spin)
 
+        # Player-name search. Substring + case-insensitive; also
+        # case-folded so "Bigge" matches "BeigeBison". Filters the
+        # cached population without re-querying the DB.
+        self.search_label = QLabel()
+        head.addWidget(self.search_label)
+        self.search_edit = QLineEdit()
+        self.search_edit.setMinimumWidth(160)
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(lambda _t: self._render_table())
+        head.addWidget(self.search_edit)
+
         self.power_help_btn = QPushButton()
         self.power_help_btn.setToolTip(t("ui.power_help.btn_tip"))
         self.power_help_btn.clicked.connect(self._show_power_help)
@@ -215,6 +227,8 @@ class PlayerRankDialog(QDialog):
             self.hero_combo.setItemText(0, t("ui.rank.hero_all"))
         self.min_games_label.setText(t("ui.aram.min_games"))
         self.limit_label.setText(t("ui.rank.limit_label"))
+        self.search_label.setText(t("ui.rank.search_label"))
+        self.search_edit.setPlaceholderText(t("ui.rank.search_placeholder"))
         self.power_help_btn.setText(t("ui.power_help.btn_label"))
         self.close_btn.setText(t("ui.aram.close"))
         self.table.setHorizontalHeaderLabels([t(k) for k in self._col_keys])
@@ -315,20 +329,33 @@ class PlayerRankDialog(QDialog):
             tbl.setRowCount(0)
             return
 
+        # Player-name search filter. Empty query → no filter. Match
+        # against display_name + toon_handle so Latin-only users can
+        # find Korean handles by typing the visible name.
+        query = (self.search_edit.text() if hasattr(self, "search_edit") else "")
+        query = query.strip().casefold()
+        if query:
+            visible = [
+                p for p in self._cached_all
+                if query in (p.display_name or "").casefold()
+                or query in (p.toon_handle or "").casefold()
+            ]
+        else:
+            visible = self._cached_all
+
         sorted_all = sorted(
-            self._cached_all,
+            visible,
             key=lambda p: self._sort_key(p),
             reverse=self._sort_desc,
         )
         slice_rows = sorted_all[:limit]
         slice_handles = {p.toon_handle for p in slice_rows}
-        # Extras = squad members not already in the slice. Sort them
-        # by the *current* column too (not by global power rank) so
-        # the pinned section is internally consistent with the main
-        # slice — clicking "WR desc" puts the highest-WR squad member
-        # first inside the extras block.
+        # Extras = squad members from the *visible* (search-filtered)
+        # population that didn't make the slice. Sort them by the
+        # current column too so the pinned section is internally
+        # consistent with the main slice.
         extras = sorted(
-            (p for p in self._cached_all
+            (p for p in visible
              if p.toon_handle in self._squad_set
              and p.toon_handle not in slice_handles),
             key=lambda p: self._sort_key(p),
