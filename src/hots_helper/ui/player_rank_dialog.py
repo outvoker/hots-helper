@@ -182,24 +182,20 @@ class PlayerRankDialog(QDialog):
         root.addWidget(self.table, 1)
 
         # Squad "extras" — anyone in the 5-stack who fell outside the
-        # top-N slice gets pinned at the bottom in a small companion
-        # table. Kept separate from the main table so the user can
-        # click columns there to sort without re-shuffling the squad
-        # rows up into the slice. Hidden when the slice already
-        # contains everyone from the squad.
-        self.extras_label = QLabel()
-        self.extras_label.setStyleSheet(
-            f"color: #f4c453; padding: 8px 0 2px 0;"
-            f" font-weight: 600;"
-        )
-        root.addWidget(self.extras_label)
-
+        # top-N slice gets pinned right under the main table. No
+        # header / no separator label so the two tables read like a
+        # single continuous list; the gold tint on extras rows is the
+        # only visual distinction. Sorting is disabled here so the
+        # squad section keeps its own (real-rank) order even when
+        # the user re-sorts the main table.
         self.extras_table = QTableWidget()
         self.extras_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.extras_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.extras_table.setAlternatingRowColors(True)
         self.extras_table.setSortingEnabled(False)
         self.extras_table.setColumnCount(len(self._col_keys))
+        # Mirror every column-resize mode from the main table so the
+        # cell boundaries line up visually.
         for i in range(len(self._col_keys)):
             self.extras_table.horizontalHeader().setSectionResizeMode(
                 i, QHeaderView.ResizeToContents
@@ -209,9 +205,9 @@ class PlayerRankDialog(QDialog):
         )
         self.extras_table.setColumnWidth(COL_NAME, 220)
         self.extras_table.horizontalHeader().setVisible(False)
-        self.extras_table.verticalHeader().setVisible(False)
-        # Compact: no scrollbar — fixed height to fit up to ~6 rows so
-        # it doesn't visually compete with the main leaderboard.
+        self.extras_table.verticalHeader().setVisible(True)
+        # Compact: fits up to ~5 rows so the squad section never grows
+        # large enough to dominate the dialog.
         self.extras_table.setMaximumHeight(180)
         root.addWidget(self.extras_table)
 
@@ -346,16 +342,11 @@ class PlayerRankDialog(QDialog):
         for j, p in enumerate(extras):
             self._fill_row(ex, j, p, is_extra=True)
         if extras:
-            self.extras_label.setText(
-                t("ui.rank.extras_label", count=len(extras))
-            )
-            self.extras_label.show()
             ex.show()
             # Cap the table to the rows we actually have, so a 1-extra
             # case doesn't show 5 rows of empty space.
             ex.setFixedHeight(min(180, 32 * len(extras) + 8))
         else:
-            self.extras_label.hide()
             ex.hide()
 
     def _fill_row(
