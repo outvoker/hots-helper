@@ -210,10 +210,34 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
 }}
 
 /* ---------- combo box dropdown -------------------------------------- */
+/* Without an explicit drop-down style Qt on macOS / Windows picks the
+ * native combobox chrome, which clashes with the dark theme — but
+ * once we set ``background`` here the platform's built-in arrow
+ * disappears too. Draw our own arrow with CSS borders so every combo
+ * has a visible "this is a dropdown" affordance. */
 QComboBox::drop-down {{
-    width: 18px;
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
     border-left: 1px solid {LINE};
     background: {BG_HOVER};
+}}
+QComboBox::drop-down:hover {{
+    background: {BG_ELEVATED};
+}}
+QComboBox::down-arrow {{
+    /* CSS triangle: 4px transparent left+right + 5px coloured top
+     * makes a small downward-pointing chevron. The :on rule flips it
+     * subtly when the popup is open so the user gets feedback. */
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {GOLD};
+    margin-right: 8px;
+}}
+QComboBox::down-arrow:on {{
+    border-top: 5px solid {GOLD_BRIGHT};
 }}
 QComboBox QAbstractItemView {{
     background-color: {BG_INPUT};

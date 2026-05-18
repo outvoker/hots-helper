@@ -15,6 +15,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QCompleter,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -97,10 +98,20 @@ class PlayerRankDialog(QDialog):
 
         # Hero filter — leftmost so it reads "玩家排行 [英雄: 全部] …".
         # Empty selection = all heroes (the default leaderboard).
+        # The combo is editable so the user can type to search; the
+        # attached QCompleter does substring-contains filtering, so
+        # typing "阿" surfaces both 阿巴瑟 and 阿兹莫丹, and typing
+        # "ling" surfaces 雷诺 (Raynor → keeps Latin transliteration
+        # users honest too — currently not in our DB but the cost is
+        # zero). NoInsert keeps free-text from being committed: the
+        # user must pick a real hero (or clear the box for "all").
         self.hero_label = QLabel()
         head.addWidget(self.hero_label)
         self.hero_combo = QComboBox()
-        self.hero_combo.setMinimumWidth(160)
+        self.hero_combo.setMinimumWidth(180)
+        self.hero_combo.setEditable(True)
+        self.hero_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.hero_combo.lineEdit().setClearButtonEnabled(True)
         self.hero_combo.currentIndexChanged.connect(lambda _i: self._reload())
         head.addWidget(self.hero_combo)
         self._populate_hero_combo()
@@ -200,9 +211,11 @@ class PlayerRankDialog(QDialog):
         """Fill the hero dropdown with every hero in the DB.
 
         ``itemData == None`` is the "all heroes" sentinel — kept as
-        the first entry so the dialog opens unfiltered. The list is
-        sorted by current locale's collation so 阿巴瑟 / 阿兹莫丹 sit
-        together and Latin names are alphabetical.
+        the first entry so the dialog opens unfiltered. Items are
+        sorted by hero name. The companion QCompleter does substring-
+        contains filtering on whatever the user types, so a 90-hero
+        list is searchable without keyboard memorising the exact
+        opening glyph.
         """
         self.hero_combo.blockSignals(True)
         self.hero_combo.clear()
@@ -214,6 +227,18 @@ class PlayerRankDialog(QDialog):
         for r in sorted(rows, key=lambda x: x["hero"]):
             self.hero_combo.addItem(r["hero"], r["hero"])
         self.hero_combo.blockSignals(False)
+
+        # Substring-contains completer so typing "阿" matches both
+        # 阿巴瑟 and 阿兹莫丹 — the default "starts-with" mode would
+        # only match items whose first character equals the prefix.
+        completer = QCompleter(
+            [self.hero_combo.itemText(i) for i in range(self.hero_combo.count())],
+            self.hero_combo,
+        )
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.hero_combo.setCompleter(completer)
 
     def _show_power_help(self) -> None:
         from .power_help import PowerHelpDialog
