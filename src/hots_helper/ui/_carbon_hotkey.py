@@ -200,46 +200,56 @@ class CarbonHotkeyManager:
         if cls._shared_handler_installed or _CARBON is None:
             return
 
-        @_EventHandlerProcPtr
-        def _trampoline(call_ref, event_ref, user_data):
-            # Pull EventHotKeyID out of the event so we know which
-            # callback to fire. The signature/id pair we registered
-            # earlier comes back here.
+        # Bind GetEventParameter once up front so the trampoline body
+        # doesn't rebind argtypes on every event.
+        _CARBON.GetEventParameter.argtypes = [
+            c_void_p, c_uint32, c_uint32, POINTER(c_uint32),
+            c_uint32, POINTER(c_uint32), c_void_p,
+        ]
+        _CARBON.GetEventParameter.restype = c_int32
+
+        # Plain Python function — wrap with the CFUNCTYPE *outside*
+        # so we keep one reference to a single trampoline object on
+        # the class. Earlier this lived inside the nested function +
+        # got assigned to cls._trampoline_ref, but the assignment
+        # races with ctypes GC: the inner CFUNCTYPE wrapper has been
+        # observed to be reaped between InstallEventHandler returning
+        # and the first real key press, so the OS calls into freed
+        # memory and silently does nothing.
+        def _impl(call_ref, event_ref, user_data):
+            logger.warning("[carbon-hk] trampoline FIRED")
             try:
-                # GetEventParameter prototype, declared lazily so we
-                # don't pay for it on non-darwin.
                 hk_id = _EventHotKeyID()
-                _CARBON.GetEventParameter.argtypes = [
-                    c_void_p, c_uint32, c_uint32, POINTER(c_uint32),
-                    c_uint32, POINTER(c_uint32), c_void_p,
-                ]
-                _CARBON.GetEventParameter.restype = c_int32
                 _CARBON.GetEventParameter(
                     event_ref,
-                    _fourcc("hkid"),    # kEventParamDirectObject for hotkey
-                    _fourcc("hkid"),    # typeEventHotKeyID
+                    _fourcc("hkid"),
+                    _fourcc("hkid"),
                     None,
                     ctypes.sizeof(_EventHotKeyID),
                     None,
                     ctypes.byref(hk_id),
                 )
-                cb = cls._id_to_callback.get(int(hk_id.id))
+                hk_int = int(hk_id.id)
             except Exception:
-                cb = None
+                logger.exception("[carbon-hk] GetEventParameter failed")
+                hk_int = -1
+            cb = cls._id_to_callback.get(hk_int)
+            logger.warning("[carbon-hk] id=%s cb=%s", hk_int, cb)
             if cb is not None:
-                # Defer to the Qt event loop so the callback runs
-                # outside the Carbon dispatcher frame.
                 try:
                     from PySide6.QtCore import QTimer
                     QTimer.singleShot(0, cb)
                 except Exception:
-                    # Qt missing? Run inline; better than dropping the
-                    # event entirely.
                     try:
                         cb()
                     except Exception:
                         logger.exception("hotkey callback failed")
             return 0
+
+        # Critical: assign *before* InstallEventHandler so the
+        # CFUNCTYPE wrapper has a strong reference held on the class
+        # the moment the OS could possibly call it back.
+        cls._trampoline_ref = _EventHandlerProcPtr(_impl)
 
         spec = _EventTypeSpec(
             eventClass=_K_EVENT_CLASS_KEYBOARD,
@@ -247,16 +257,14 @@ class CarbonHotkeyManager:
         )
         target = _CARBON.GetApplicationEventTarget()
         rc = _CARBON.InstallEventHandler(
-            target, _trampoline, 1, byref(spec), None,
+            target, cls._trampoline_ref, 1, byref(spec), None,
             byref(cls._shared_handler_ref),
         )
         if rc != 0:
-            logger.warning("InstallEventHandler returned %d", rc)
+            logger.warning("[carbon-hk] InstallEventHandler returned %d", rc)
+            cls._trampoline_ref = None
             return
-        # Keep both refs alive: the trampoline closure and Carbon's
-        # opaque handler ref. Without the trampoline ref ctypes will
-        # GC the closure object the moment we leave this scope.
-        cls._trampoline_ref = _trampoline
+        logger.warning("[carbon-hk] handler installed, target=%s", target)
         cls._shared_handler_installed = True
 
     # --- public API --------------------------------------------------------
@@ -280,6 +288,10 @@ class CarbonHotkeyManager:
         if parsed is None:
             return False, f"unrecognised key in {combo!r}"
         vk, mods = parsed
+        logger.warning(
+            "[carbon-hk] set_hotkey combo=%r → vk=0x%x mods=0x%x",
+            combo, vk, mods,
+        )
 
         self._ensure_handler_installed()
         cls = type(self)
@@ -293,6 +305,10 @@ class CarbonHotkeyManager:
             _CARBON.GetApplicationEventTarget(),
             0,
             byref(ref),
+        )
+        logger.warning(
+            "[carbon-hk] RegisterEventHotKey rc=%d ref=%s id=%d",
+            rc, ref.value, hk_id,
         )
         if rc != 0:
             return False, f"RegisterEventHotKey failed (status {rc})"
