@@ -38,7 +38,7 @@ def make_overlay_floating(widget: QWidget) -> None:
             NSWindowCollectionBehaviorCanJoinAllSpaces,
             NSWindowCollectionBehaviorFullScreenAuxiliary,
             NSWindowCollectionBehaviorStationary,
-            NSStatusWindowLevel,
+            NSPopUpMenuWindowLevel,
         )
     except Exception:
         return
@@ -58,10 +58,20 @@ def make_overlay_floating(widget: QWidget) -> None:
             | NSWindowCollectionBehaviorFullScreenAuxiliary
             | NSWindowCollectionBehaviorStationary
         )
-        # Status window level sits above normal floating windows and
-        # above fullscreen app overlays without going so high we cover
-        # system menus (which would be a NSScreenSaverWindowLevel).
-        nswindow.setLevel_(NSStatusWindowLevel)
+        # NSStatusWindowLevel (25) wasn't high enough to sit above a
+        # fullscreen game's own overlay surfaces. NSPopUpMenuWindowLevel
+        # (101) is what Alfred / Raycast use for their result panel —
+        # it's above every regular app's window stack including
+        # fullscreen Metal games, but still below system menus / dock.
+        nswindow.setLevel_(NSPopUpMenuWindowLevel)
+        # orderFrontRegardless brings the window forward *without*
+        # activating the app, which is exactly what we want for an
+        # Accessory-policy helper: pop up over the game while leaving
+        # the game in the foreground for input.
+        try:
+            nswindow.orderFrontRegardless()
+        except Exception:
+            pass
     except Exception:
         # Best-effort: if any AppKit interop fails we just leave the
         # window with stock Qt behavior. Don't blow up the UI over a
