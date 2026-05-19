@@ -397,12 +397,12 @@ _translations: dict[str, dict[str, str]] = {
         "en": "{board} · {count} player(s) · {min_games}+ games",
     },
     "ui.rank.summary_total": {
-        "zh": "共 {count} 名玩家 · 最少 {min_games} 局起算 · 点击列名切换排序",
-        "en": "{count} player(s) · {min_games}+ games · click any column header to sort",
+        "zh": "风暴联赛 · 共 {count} 名玩家 · 最少 {min_games} 局起算 · 点击列名切换排序",
+        "en": "Storm League · {count} player(s) · {min_games}+ games · click any column header to sort",
     },
     "ui.rank.summary_hero": {
-        "zh": "{hero} · {count} 名玩家 · 最少 {min_games} 局起算",
-        "en": "{hero} · {count} player(s) · {min_games}+ games",
+        "zh": "风暴联赛 · {hero} · {count} 名玩家 · 最少 {min_games} 局起算",
+        "en": "Storm League · {hero} · {count} player(s) · {min_games}+ games",
     },
     "ui.rank.hero_filter": {"zh": "英雄", "en": "Hero"},
     "ui.rank.hero_all": {"zh": "全部英雄", "en": "All heroes"},
@@ -427,10 +427,12 @@ _translations: dict[str, dict[str, str]] = {
     },
     "ui.rank.footer_single": {
         "zh": "<span style='color:#888;'>"
+              "数据范围：仅风暴联赛对局（天命乱斗等其他模式不计入）。"
               "战斗力 = 胜率 + KDA + 输出 + 推塔 + 治疗 + 硬币 + 经验 等多维加权后的综合百分位。"
               "BP 分析时，战斗力较低的我方槽位会标红，较高的敌方槽位会标金。"
               "</span>",
         "en": "<span style='color:#888;'>"
+              "Scope: Storm League only — ARAM and other modes are excluded. "
               "Power = a percentile rank over a weighted blend of WR, KDA, damage, structure, healing, soak, XP, etc. "
               "BP analysis flags low-power ally slots in red and high-power enemy slots in gold."
               "</span>",
