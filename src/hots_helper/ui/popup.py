@@ -87,6 +87,39 @@ def _fmt_kda(k: float, d: float, a: float) -> str:
     return f"{k:.1f}/{d:.1f}/{a:.1f}"
 
 
+def _fmt_relative_time(played_at_iso: str) -> str:
+    """Render an ISO timestamp as a coarse relative phrase.
+
+    Anything within 24 h shows hours; days under 14 show days; weeks
+    under 8 show weeks; otherwise months. The display is i18n'd via
+    the ui.popup.card.last_match_* keys so locale changes pick up the
+    right unit suffix without code changes.
+    """
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(played_at_iso)
+    except Exception:
+        return played_at_iso
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - dt
+    secs = int(delta.total_seconds())
+    if secs < 0:
+        secs = 0
+    if secs < 3600:
+        n = max(1, secs // 60)
+        return t("ui.popup.card.relative_minutes", n=n)
+    if secs < 86_400:
+        n = secs // 3600
+        return t("ui.popup.card.relative_hours", n=n)
+    days = secs // 86_400
+    if days < 14:
+        return t("ui.popup.card.relative_days", n=days)
+    if days < 56:
+        return t("ui.popup.card.relative_weeks", n=days // 7)
+    return t("ui.popup.card.relative_months", n=days // 30)
+
+
 def _fmt_k(value: float) -> str:
     """Render large counts compactly (43,123 → 43k; 510 → 510)."""
     if value >= 10_000:
@@ -146,6 +179,30 @@ def _summary_body_html(summary: PlayerSummary, expanded: bool) -> str:
                 hl=_fmt_k(summary.avg_healing),
                 xp=_fmt_k(summary.avg_xp),
                 cc=f"{summary.avg_cc:.0f}")
+            + "</span>"
+        )
+
+    # "Last seen" line: most recent match's time + hero + KDA. The
+    # relative-time helper turns 2026-04-28 into "21 天前" so the
+    # user can tell at a glance whether this is a recent encounter
+    # or an ancient ghost from the squad's first month of replays.
+    if summary.recent_matches:
+        last = summary.recent_matches[0]
+        when = _fmt_relative_time(last.played_at)
+        result_word = t(
+            "ui.popup.card.match_won" if last.result == 1
+            else "ui.popup.card.match_lost"
+        )
+        result_color = "#7c7" if last.result == 1 else "#c77"
+        parts.append(
+            "<span style='color:#888;'>"
+            + t(
+                "ui.popup.card.last_match",
+                when=when,
+                hero=f"<b style='color:#cdb;'>{last.hero}</b>",
+                result=f"<span style='color:{result_color};'>{result_word}</span>",
+                kda=_fmt_kda(last.kills, last.deaths, last.assists),
+            )
             + "</span>"
         )
 

@@ -605,6 +605,17 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "平均：英伤 {hd} · 承伤 {dt} · 治疗 {hl} · XP {xp} · 控时 {cc}s",
         "en": "avg HeroDmg {hd} · DmgTaken {dt} · Healing {hl} · XP {xp} · CC {cc}s",
     },
+    "ui.popup.card.last_match": {
+        "zh": "上次对局 {when} · {hero} · {result} · K/D/A {kda}",
+        "en": "Last match {when} · {hero} · {result} · K/D/A {kda}",
+    },
+    "ui.popup.card.match_won":  {"zh": "胜",   "en": "WIN"},
+    "ui.popup.card.match_lost": {"zh": "负",   "en": "LOSS"},
+    "ui.popup.card.relative_minutes": {"zh": "{n} 分钟前", "en": "{n}m ago"},
+    "ui.popup.card.relative_hours":   {"zh": "{n} 小时前", "en": "{n}h ago"},
+    "ui.popup.card.relative_days":    {"zh": "{n} 天前",   "en": "{n}d ago"},
+    "ui.popup.card.relative_weeks":   {"zh": "{n} 周前",   "en": "{n}w ago"},
+    "ui.popup.card.relative_months":  {"zh": "{n} 个月前", "en": "{n}mo ago"},
     "ui.popup.card.hero_line_main": {
         "zh": "{games} 场 {wr}%  K/D/A {kda}",
         "en": "{games}G {wr}%  K/D/A {kda}",
