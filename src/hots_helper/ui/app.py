@@ -32,6 +32,13 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(True)
     app.setWindowIcon(app_icon())
     apply_app_theme(app)
+    # macOS: opt out of regular activation so opening a popup over
+    # HotS doesn't yank the helper to the foreground (which would
+    # also drop the game out of fullscreen). The dock icon goes away
+    # — the floating launcher chip + the global hotkey are the
+    # actual control surfaces anyway. No-op everywhere else.
+    from .macos_overlay import set_accessory_app
+    set_accessory_app()
 
     config = Config.load()
     set_language(getattr(config, "language", "zh") or "zh")

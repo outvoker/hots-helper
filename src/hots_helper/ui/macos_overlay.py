@@ -73,3 +73,41 @@ def apply_to_all(widgets: Iterable[QWidget]) -> None:
     for w in widgets:
         if w is not None:
             make_overlay_floating(w)
+
+
+def set_accessory_app() -> None:
+    """Switch the running app to ``NSApplicationActivationPolicyAccessory``.
+
+    Default Qt apps run as ``.Regular`` — full LSUIElement=false
+    behaviour: dock icon, cmd+tab participation, *and* every window
+    show() ends up activating NSApp. The third one is the killer for
+    a game overlay: opening a popup over HotS yanks helper to the
+    foreground and the game loses focus.
+
+    Accessory apps (the policy used by Alfred / Raycast / menu-bar
+    utilities) keep their windows fully usable but never appear in
+    the dock, never appear in cmd+tab, and never auto-activate the
+    app when a window is shown — so the BP popup floats over the
+    game without bringing the helper window itself forward.
+
+    Called once from :func:`hots_helper.ui.app.main` before any UI
+    widget is shown. No-op on non-darwin / when PyObjC isn't loadable.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import (
+            NSApp,
+            NSApplication,
+            NSApplicationActivationPolicyAccessory,
+        )
+    except Exception:
+        return
+    try:
+        # NSApp is the global instance; create it if Qt hasn't yet.
+        ns_app = NSApp() if NSApp() is not None else (
+            NSApplication.sharedApplication()
+        )
+        ns_app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    except Exception:
+        return
