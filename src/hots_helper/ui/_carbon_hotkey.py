@@ -220,15 +220,25 @@ class CarbonHotkeyManager:
             logger.warning("[carbon-hk] trampoline FIRED")
             try:
                 hk_id = _EventHotKeyID()
-                _CARBON.GetEventParameter(
+                # Carbon constant lookup gotcha:
+                #   kEventParamDirectObject = '----'   (the param NAME)
+                #   typeEventHotKeyID       = 'hkid'   (the param TYPE)
+                # I had both as 'hkid' originally, which made the call
+                # succeed but return an empty struct (id=0), so every
+                # press resolved to no callback.
+                rc = _CARBON.GetEventParameter(
                     event_ref,
-                    _fourcc("hkid"),
-                    _fourcc("hkid"),
+                    _fourcc("----"),    # kEventParamDirectObject
+                    _fourcc("hkid"),    # typeEventHotKeyID
                     None,
                     ctypes.sizeof(_EventHotKeyID),
                     None,
                     ctypes.byref(hk_id),
                 )
+                if rc != 0:
+                    logger.warning(
+                        "[carbon-hk] GetEventParameter rc=%d", rc
+                    )
                 hk_int = int(hk_id.id)
             except Exception:
                 logger.exception("[carbon-hk] GetEventParameter failed")
