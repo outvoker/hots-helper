@@ -89,8 +89,15 @@ if sys.platform == "darwin":
         logger.warning("Carbon framework unavailable: %s", e)
         _CARBON = None
     if _CARBON is not None:
-        _CARBON.GetEventDispatcherTarget.restype = c_void_p
-        _CARBON.GetEventDispatcherTarget.argtypes = []
+        # We register against GetApplicationEventTarget(), not
+        # GetEventDispatcherTarget(). Qt's Cocoa platform plug-in
+        # pumps the application target through the NSApp run loop
+        # but does *not* propagate events into the dispatcher target,
+        # so registering on the dispatcher silently swallows the
+        # hotkey events. Caught this with a manual A/B test against
+        # both targets.
+        _CARBON.GetApplicationEventTarget.restype = c_void_p
+        _CARBON.GetApplicationEventTarget.argtypes = []
         _CARBON.RegisterEventHotKey.restype = c_int32
         _CARBON.RegisterEventHotKey.argtypes = [
             c_uint32, c_uint32, _EventHotKeyID, c_void_p, c_uint32,
@@ -238,7 +245,7 @@ class CarbonHotkeyManager:
             eventClass=_K_EVENT_CLASS_KEYBOARD,
             eventKind=_K_EVENT_HOT_KEY_PRESSED,
         )
-        target = _CARBON.GetEventDispatcherTarget()
+        target = _CARBON.GetApplicationEventTarget()
         rc = _CARBON.InstallEventHandler(
             target, _trampoline, 1, byref(spec), None,
             byref(cls._shared_handler_ref),
@@ -283,7 +290,7 @@ class CarbonHotkeyManager:
             vk,
             mods,
             _EventHotKeyID(signature=_fourcc("HTMe"), id=hk_id),
-            _CARBON.GetEventDispatcherTarget(),
+            _CARBON.GetApplicationEventTarget(),
             0,
             byref(ref),
         )
