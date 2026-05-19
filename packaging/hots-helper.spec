@@ -159,6 +159,7 @@ hiddenimports = [
     "hots_helper.ui.launcher",
     "hots_helper.ui.hotkey_field",
     "hots_helper.ui.macos_overlay",
+    "hots_helper.ui._carbon_hotkey",
     "hots_helper.player_rank",
     "hots_helper.ui.player_rank_dialog",
     "hots_helper.ui.power_help",

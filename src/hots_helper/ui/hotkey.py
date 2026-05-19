@@ -62,12 +62,28 @@ except Exception:  # pragma: no cover - platform dependent
 
 
 class HotkeyManager(QObject):
+    """Global hotkey bridge with platform-specific backends.
+
+    * **macOS**: uses Carbon ``RegisterEventHotKey`` via
+      :mod:`._carbon_hotkey`. No Accessibility permission required
+      and it doesn't read the keyboard stream, so it never collides
+      with the IME composition path that crashes pynput.
+    * **Windows / Linux**: uses pynput's ``GlobalHotKeys``, which on
+      Windows uses Win32 ``RegisterHotKey`` and on Linux uses the
+      X record extension.
+
+    Both backends emit ``triggered`` on the Qt main thread; the
+    callbacks run inside QTimer.singleShot(0, …) trampolines so the
+    Carbon event-handler frame doesn't see a long-running task.
+    """
+
     triggered = Signal()
     error = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
         self._listener: "keyboard.GlobalHotKeys | None" = None
+        self._carbon: "_CarbonHM | None" = None
         self._current: str = ""
 
     @property
@@ -75,26 +91,29 @@ class HotkeyManager(QObject):
         return self._current
 
     def set_hotkey(self, combo: str) -> None:
-        """``combo`` in pynput form, e.g. ``<ctrl>+<shift>+h``.
-
-        macOS: hotkeys are disabled. Background:
-        * The pynput keyboard listener processes every keystroke
-          system-wide; on PyObjC ≥ 11 it occasionally hits a
-          lazy-import KeyError when a CJK input method dispatches
-          its first character, crashing the listener thread (and on
-          some keystrokes the whole process).
-        * mac users can already trigger every hotkey-action through
-          the floating launcher chip, so a global hotkey here is
-          purely a convenience that doesn't justify keyboard-input
-          stability risk.
-        Windows is unaffected — pynput uses the Win32 RegisterHotKey
-        API there and never touches the IME pipeline.
-        """
+        """``combo`` in pynput form, e.g. ``<ctrl>+<shift>+h``."""
+        # ----- macOS: Carbon -------------------------------------------
         if sys.platform == "darwin":
-            self.error.emit(
-                "macOS: 全局快捷键已禁用，请使用悬浮按钮触发各项功能。"
+            from ._carbon_hotkey import (
+                CarbonHotkeyManager as _CarbonHM,
+                is_available as _carbon_available,
             )
+            if not _carbon_available():
+                self.error.emit("Carbon hotkey backend unavailable")
+                return
+            self.stop()
+            if not combo:
+                return
+            self._carbon = _CarbonHM(self._fire)
+            ok, msg = self._carbon.set_hotkey(combo)
+            if ok:
+                self._current = combo
+            else:
+                self._carbon = None
+                self.error.emit(f"failed to register hotkey {combo!r}: {msg}")
             return
+
+        # ----- Windows / Linux: pynput ---------------------------------
         if keyboard is None:
             self.error.emit("pynput not available; global hotkeys disabled")
             return
@@ -113,10 +132,16 @@ class HotkeyManager(QObject):
         self.triggered.emit()
 
     def stop(self) -> None:
+        if self._carbon is not None:
+            try:
+                self._carbon.stop()
+            except Exception:
+                pass
+            self._carbon = None
         if self._listener is not None:
             try:
                 self._listener.stop()
             except Exception:
                 pass
             self._listener = None
-            self._current = ""
+        self._current = ""
