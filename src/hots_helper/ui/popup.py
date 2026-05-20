@@ -27,6 +27,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QRect,
     QSize,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QFont, QGuiApplication
@@ -62,6 +63,7 @@ from ..player_rank import (
 )
 from ..talent_names import talent_label
 from .macos_overlay import make_overlay_floating
+from .popup_brief import CardBrief, SquadMemberMapBrief, build_brief
 from .theme import (
     BG_DEEP,
     BG_ELEVATED,
@@ -274,6 +276,11 @@ class _PlayerCard(QFrame):
         self.setStyleSheet(self._base_qss)
         self._expanded = False
         self._summaries: list[PlayerSummary] = []
+        # Last flag state — kept here so the "copy brief" button can
+        # render the same low-power / high-power tag without recomputing
+        # the leaderboard.
+        self._flag_kind: str = ""
+        self._flag_rank: PlayerRankRow | None = None
 
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 6, 8, 6)
@@ -385,6 +392,8 @@ class _PlayerCard(QFrame):
         power: float,
         games: int,
         win_rate: float,
+        *,
+        rank_row: PlayerRankRow | None = None,
     ) -> None:
         """Flag this slot based on the player's combat-power percentile.
 
@@ -393,6 +402,8 @@ class _PlayerCard(QFrame):
         enemy slot in the top 25% (gold banner, "high-power opponent").
         ``kind == ""`` clears the flag.
         """
+        self._flag_kind = kind
+        self._flag_rank = rank_row if kind else None
         if not kind:
             self.flag_label.hide()
             self.flag_label.setText("")
@@ -725,6 +736,13 @@ class PopupWindow(QWidget):
         self._screenshot_path = None
         self._current_drafter = ""
 
+        # Latest analysis state, captured so the "copy brief" button can
+        # serialise the same data the user is looking at without
+        # re-running any of the heavier BP queries.
+        self._last_bans: list[BanCandidate] = []
+        self._last_map_tier: list[MapTierBan] = []
+        self._last_picks: list[PickCandidate] = []
+
         # Minimised "pill" state — a small floating chip docked near the
         # top-center-right of the primary screen. Click it to restore.
         self._is_pill = False
@@ -763,6 +781,19 @@ class PopupWindow(QWidget):
         self.analyze_btn = QPushButton()
         self.analyze_btn.clicked.connect(self._run_analysis)
         header.addWidget(self.analyze_btn)
+
+        # One-shot brief copier — squad members paste this into Discord/
+        # WeChat during the loading screen.
+        self.copy_btn = QPushButton()
+        self.copy_btn.clicked.connect(self._copy_brief_to_clipboard)
+        self.copy_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG_INPUT}; color:{TEXT};"
+            f" border:1px solid {LINE}; padding: 4px 10px;"
+            f" border-radius:4px; }}"
+            f"QPushButton:hover {{ border-color:{GOLD_DIM};"
+            f" color:{GOLD_BRIGHT}; }}"
+        )
+        header.addWidget(self.copy_btn)
 
         # Minimise → pill button. Sits just before the close button so it
         # gets the same visual weight without pushing other controls
@@ -854,6 +885,8 @@ class PopupWindow(QWidget):
         if hasattr(self.map_edit, "lineEdit"):
             self.map_edit.lineEdit().setPlaceholderText(t("ui.popup.map_placeholder"))
         self.analyze_btn.setText(t("ui.popup.analyze"))
+        self.copy_btn.setText(t("ui.popup.copy_btn"))
+        self.copy_btn.setToolTip(t("ui.popup.copy_btn_tip"))
         # Side column titles
         if hasattr(self, "_ally_col"):
             self._ally_col.title_label.setText(t("ui.popup.allies"))
@@ -997,6 +1030,7 @@ class PopupWindow(QWidget):
             self.map_label,
             self.map_edit,
             self.analyze_btn,
+            self.copy_btn,
             self.minimize_btn,
         ):
             btn.hide()
@@ -1034,6 +1068,7 @@ class PopupWindow(QWidget):
             self.map_label,
             self.map_edit,
             self.analyze_btn,
+            self.copy_btn,
             self.minimize_btn,
         ):
             btn.show()
@@ -1063,8 +1098,17 @@ class PopupWindow(QWidget):
                 t("ui.popup.region.no_screenshot_body"),
             )
             return
+        # Important: do NOT pass ``parent=self`` here. On macOS Qt
+        # ties a modal child's NSWindow level to its parent's, so a
+        # parented dialog ends up at the popup's NSPopUpMenuWindowLevel
+        # (101) — the same level the popup itself uses. The popup's
+        # own ``showEvent`` keeps re-asserting that level via
+        # ``orderFrontRegardless``, which drags the parented dialog
+        # back behind it within the same z-stack. Detaching from the
+        # popup lets the dialog claim a clean
+        # NSScreenSaverWindowLevel (1000) all to itself.
         try:
-            dlg = RegionSelectorDialog(self._screenshot_path, parent=self)
+            dlg = RegionSelectorDialog(self._screenshot_path, parent=None)
         except Exception as e:
             QMessageBox.warning(self, t("ui.popup.region.cannot_open"), str(e))
             return
@@ -1075,10 +1119,28 @@ class PopupWindow(QWidget):
             chosen["bbox"] = (x, y, w, h)
 
         dlg.region_picked.connect(_on_picked)
+        # While the region selector is up, drop the popup back down to
+        # the regular Qt always-on-top level so it can't keep racing
+        # the dialog for screen-saver level. We restore via
+        # ``make_overlay_floating(self)`` once the dialog closes.
+        try:
+            from .macos_overlay import lower_overlay_level
+            lower_overlay_level(self)
+        except Exception:
+            pass
         # PySide6 uses QDialog.DialogCode.Accepted (== 1). exec() returns
         # an int, so compare against the int directly to avoid PySide6/PyQt
         # version drift.
-        if dlg.exec() != 1 or "bbox" not in chosen:
+        try:
+            result = dlg.exec()
+        finally:
+            # Restore the popup's overlay level no matter how the
+            # dialog closed (accept, reject, exception).
+            try:
+                make_overlay_floating(self)
+            except Exception:
+                pass
+        if result != 1 or "bbox" not in chosen:
             return
 
         x, y, w, h = chosen["bbox"]
@@ -1186,6 +1248,7 @@ class PopupWindow(QWidget):
             power=chosen.power,
             games=chosen.games,
             win_rate=chosen.win_rate,
+            rank_row=chosen,
         )
 
     def _refresh_bans(self) -> None:
@@ -1211,6 +1274,8 @@ class PopupWindow(QWidget):
                 )
 
         self.ban_panel.set_candidates(bans, profiles=profiles, map_tier=map_tier)
+        self._last_bans = list(bans)
+        self._last_map_tier = list(map_tier)
 
     def _resolve_squad_handles(self, ally_names: list[str]) -> list[str]:
         """Map ally display names to toon_handle for the map-tier ban query."""
@@ -1264,6 +1329,8 @@ class PopupWindow(QWidget):
         self.ban_panel.set_candidates(
             bans, profiles=profiles, map_tier=map_tier_bans
         )
+        self._last_bans = list(bans)
+        self._last_map_tier = list(map_tier_bans)
 
         # Pick list keyed on map.
         if map_name:
@@ -1271,6 +1338,7 @@ class PopupWindow(QWidget):
         else:
             picks = []
         self.pick_panel.set_candidates(picks)
+        self._last_picks = list(picks)
 
         # Per-card lookups. Only query cards with names. Pass the
         # current map so each PlayerSummary gets a map_heroes list to
@@ -1319,3 +1387,77 @@ class PopupWindow(QWidget):
         # A single-card correction may shift the ban list (any side change
         # can affect map-tier bans through ally squad detection).
         self._refresh_bans()
+
+    # --- copy brief to clipboard ---------------------------------------------
+
+    def _card_briefs(self, cards: list["_PlayerCard"]) -> list[CardBrief]:
+        """Snapshot each card's name + summaries + flag for the brief."""
+        return [
+            CardBrief(
+                typed_name=c.name,
+                summaries=list(c._summaries),
+                flag_kind=c._flag_kind,
+                flag_rank=c._flag_rank,
+            )
+            for c in cards
+        ]
+
+    # Heroes need at least this many games on the map before we list
+    # them in the squad section — keeps a single 1/0 fluke off the brief.
+    _SQUAD_MAP_HERO_MIN_GAMES = 2
+    _SQUAD_MAP_TOP_N = 3
+
+    def _squad_briefs(self, map_name: str | None) -> list[SquadMemberMapBrief]:
+        """Squad's own track record on the current map, on this draft's
+        ally cards.
+
+        Reuses ``PlayerSummary.map_heroes`` that ``_run_analysis`` already
+        loaded into each ally slot — no extra DB round-trips. Players
+        with zero map history get skipped so the section stays scannable.
+        """
+        if not map_name:
+            return []
+
+        out: list[SquadMemberMapBrief] = []
+        for card in self._ally_cards:
+            for s in card._summaries:
+                if not s.map_heroes:
+                    continue
+                # Filter out zero-sample heroes, then sort by winrate
+                # with games as tiebreak so a 100% on 2 games still
+                # tops 60% on 5 — what we want for "specialty hero on
+                # this map".
+                usages = [
+                    h for h in s.map_heroes
+                    if h.games >= self._SQUAD_MAP_HERO_MIN_GAMES
+                ]
+                usages.sort(key=lambda u: (-u.winrate, -u.games))
+                total_games = sum(h.games for h in s.map_heroes)
+                total_wins = sum(h.wins for h in s.map_heroes)
+                out.append(
+                    SquadMemberMapBrief(
+                        display_name=s.display_name or card.name,
+                        map_games=total_games,
+                        map_wins=total_wins,
+                        top_heroes=usages[: self._SQUAD_MAP_TOP_N],
+                    )
+                )
+        return out
+
+    def _copy_brief_to_clipboard(self) -> None:
+        map_name = self.map_edit.currentText().strip() or None
+        text = build_brief(
+            map_name=map_name,
+            bans=self._last_bans,
+            map_tier_bans=self._last_map_tier,
+            picks=self._last_picks,
+            ally_cards=self._card_briefs(self._ally_cards),
+            enemy_cards=self._card_briefs(self._enemy_cards),
+            squad_map_briefs=self._squad_briefs(map_name),
+        )
+        QGuiApplication.clipboard().setText(text)
+        # Flash the button to confirm. 1.5s is long enough to register
+        # without lingering past the moment the user moves on.
+        original = t("ui.popup.copy_btn")
+        self.copy_btn.setText(t("ui.popup.copy_btn_done"))
+        QTimer.singleShot(1500, lambda: self.copy_btn.setText(original))
