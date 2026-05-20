@@ -394,6 +394,8 @@ class MainWindow(QMainWindow):
         self._aram_dialog = None
         # Lazily created when the user first clicks the player-rankings button.
         self._player_rank_dialog = None
+        # Lazily created when the user first clicks the weekly-report button.
+        self._weekly_dialog = None
         # Cloud sync runtime
         self._sync_thread: QThread | None = None
         self._sync_worker: SyncWorker | None = None
@@ -653,9 +655,16 @@ class MainWindow(QMainWindow):
         self.player_rank_btn.clicked.connect(self._show_player_rankings)
         self.player_rank_btn.setMinimumHeight(36)
         player_row.addWidget(self.player_rank_btn)
+        # Weekly report sits next to the player ranking entry — both are
+        # "look at squad performance" actions, just at different time
+        # scales.
+        self.weekly_btn = QPushButton()
+        self.weekly_btn.clicked.connect(self._show_weekly_report)
+        self.weekly_btn.setMinimumHeight(36)
+        player_row.addWidget(self.weekly_btn)
         v.addLayout(player_row)
 
-        for b in (self.sl_btn, self.aram_btn, self.player_rank_btn):
+        for b in (self.sl_btn, self.aram_btn, self.player_rank_btn, self.weekly_btn):
             b.style().unpolish(b)
             b.style().polish(b)
         # Trailing flexible space so the card matches the BP card's height.
@@ -742,6 +751,8 @@ class MainWindow(QMainWindow):
         self.aram_btn.setToolTip(t("ui.main.aram_ranking_tip"))
         self.player_rank_btn.setText(t("ui.main.player_ranking"))
         self.player_rank_btn.setToolTip(t("ui.main.player_ranking_tip"))
+        self.weekly_btn.setText(t("ui.weekly.btn"))
+        self.weekly_btn.setToolTip(t("ui.weekly.btn_tip"))
 
         self.log_box.setTitle(t("ui.main.activity"))
         self.credit_label.setText(t("ui.main.credit"))
@@ -1040,6 +1051,22 @@ class MainWindow(QMainWindow):
         self._player_rank_dialog.show()
         self._player_rank_dialog.raise_()
         self._player_rank_dialog.activateWindow()
+
+    def _show_weekly_report(self) -> None:
+        """Open the squad weekly-report dialog. Lazy-init + reused."""
+        if (
+            not hasattr(self, "_weekly_dialog")
+            or self._weekly_dialog is None
+        ):
+            from .weekly_report_dialog import WeeklyReportDialog
+            self._weekly_dialog = WeeklyReportDialog(
+                self.store, days=7, parent=self,
+            )
+        else:
+            self._weekly_dialog._reload()
+        self._weekly_dialog.show()
+        self._weekly_dialog.raise_()
+        self._weekly_dialog.activateWindow()
 
     def _show_hero_ranking(self, mode: str = "ARAM") -> None:
         """Open the hero-strength dialog focused on the given mode.

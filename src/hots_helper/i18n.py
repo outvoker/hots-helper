@@ -626,6 +626,190 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "英伤 {hd} · 承伤 {dt} · 推塔 {strd} · 治疗 {hl} · XP {xp} · 控时 {cc}s",
         "en": "HeroDmg {hd} · Taken {dt} · Struct {strd} · Heal {hl} · XP {xp} · CC {cc}s",
     },
+    # === Copy-to-clipboard brief =======================================
+    "ui.popup.copy_btn": {"zh": "📋 复制简报", "en": "📋 Copy brief"},
+    "ui.popup.copy_btn_done": {"zh": "✓ 已复制", "en": "✓ Copied"},
+    "ui.popup.copy_btn_tip": {
+        "zh": "复制本局 BP 分析简报（ban/pick 推荐 + 十位玩家概况）",
+        "en": "Copy this draft's brief (ban/pick suggestions + 10 player overviews)",
+    },
+    "ui.popup.brief.title": {
+        "zh": "🧭 BP 分析简报",
+        "en": "🧭 BP scout brief",
+    },
+    "ui.popup.brief.map_line": {"zh": "地图：{map}", "en": "Map: {map}"},
+    "ui.popup.brief.ban_section": {
+        "zh": "🚫 推荐 ban",
+        "en": "🚫 Bans",
+    },
+    "ui.popup.brief.ban_history_header": {
+        "zh": "  敌方招牌：",
+        "en": "  Enemy signature:",
+    },
+    "ui.popup.brief.ban_map_header": {
+        "zh": "  本图强势（我方少用）：",
+        "en": "  Strong on map (we rarely play):",
+    },
+    "ui.popup.brief.ban_empty": {
+        "zh": "暂无显著 ban 推荐",
+        "en": "no notable ban suggestions",
+    },
+    "ui.popup.brief.we_never_play": {"zh": "我方从不使用", "en": "we never play"},
+    "ui.popup.brief.we_play_n": {"zh": "我方使用 {n} 次", "en": "we play {n}x"},
+    "ui.popup.brief.pick_section": {
+        "zh": "✅ 推荐 pick",
+        "en": "✅ Picks",
+    },
+    "ui.popup.brief.pick_empty": {
+        "zh": "本图暂无显著强势的英雄",
+        "en": "no significantly strong picks on this map",
+    },
+    "ui.popup.brief.lift_above": {
+        "zh": "比平均高 {lift}%",
+        "en": "{lift}% above avg",
+    },
+    "ui.popup.brief.lift_neutral": {"zh": "与平均持平", "en": "≈ avg"},
+    "ui.popup.brief.allies_section": {
+        "zh": "🤝 我方队伍",
+        "en": "🤝 Allies",
+    },
+    "ui.popup.brief.enemies_section": {
+        "zh": "⚔️ 敌方队伍",
+        "en": "⚔️ Enemies",
+    },
+    "ui.popup.brief.no_data": {
+        "zh": "无本地数据",
+        "en": "no local data",
+    },
+    "ui.popup.brief.note_not_found": {
+        "zh": "本地数据库未找到",
+        "en": "not in local DB",
+    },
+    "ui.popup.brief.summary_line": {
+        "zh": "{games} 场 / {wr} / KDA {kda} · 英伤 {hd} · 治疗 {hl} · 承伤 {dt}",
+        "en": "{games}G / {wr} / KDA {kda} · HeroDmg {hd} · Heal {hl} · Taken {dt}",
+    },
+    "ui.popup.brief.hero_chip": {
+        "zh": "{hero} {games}场 {wr}",
+        "en": "{hero} {games}G {wr}",
+    },
+    "ui.popup.brief.last_match": {
+        "zh": "上次：{when} · {hero} · {result} · KDA {kda}",
+        "en": "Last: {when} · {hero} · {result} · KDA {kda}",
+    },
+    "ui.popup.brief.flag_worst": {
+        "zh": "🪦 低战力（{power}）",
+        "en": "🪦 low power ({power})",
+    },
+    "ui.popup.brief.flag_best": {
+        "zh": "👑 高战力（{power}）",
+        "en": "👑 high power ({power})",
+    },
+    "ui.popup.brief.squad_section": {
+        "zh": "🧑‍🤝‍🧑 我方本图战绩 — {map}",
+        "en": "🧑‍🤝‍🧑 Squad on {map}",
+    },
+    "ui.popup.brief.squad_empty": {
+        "zh": "暂无我方在本图的战绩",
+        "en": "no squad games on this map yet",
+    },
+    "ui.popup.brief.squad_total": {
+        "zh": "本图共 {games} 场（胜率 {wr}）",
+        "en": "{games}G on map ({wr} WR)",
+    },
+    "ui.popup.brief.squad_no_top": {
+        "zh": "暂无达到样本量的英雄",
+        "en": "no hero hits the sample threshold",
+    },
+    "ui.popup.brief.squad_hero_line": {
+        "zh": "{hero}  {wins}/{games} ({wr}) · KDA {kda} · 英伤 {hd} · 治疗 {hl} · 承伤 {dt}",
+        "en": "{hero}  {wins}/{games} ({wr}) · KDA {kda} · HeroDmg {hd} · Heal {hl} · Taken {dt}",
+    },
+
+    # === Weekly squad report ===========================================
+    "ui.weekly.btn": {"zh": "📅 本周战报", "en": "📅 Weekly report"},
+    "ui.weekly.btn_tip": {
+        "zh": "查看小队最近 7 天的对局总结",
+        "en": "Generate a digest of the squad's last 7 days",
+    },
+    "ui.weekly.dialog_title": {
+        "zh": "小队周报",
+        "en": "Weekly squad report",
+    },
+    "ui.weekly.copy_btn": {"zh": "📋 复制周报", "en": "📋 Copy report"},
+    "ui.weekly.copy_btn_done": {"zh": "✓ 已复制", "en": "✓ Copied"},
+    "ui.weekly.empty": {
+        "zh": "<i style='color:#a88;'>最近 {days} 天小队没有风暴联赛记录。</i>",
+        "en": "<i style='color:#a88;'>No Storm League games for the squad in the last {days} days.</i>",
+    },
+    "ui.weekly.title": {
+        "zh": "🗓️ 小队周报 — 最近 {days} 天",
+        "en": "🗓️ Weekly squad report — last {days} days",
+    },
+    "ui.weekly.window_line": {
+        "zh": "时间窗口：{start} → {end}",
+        "en": "Window: {start} → {end}",
+    },
+    "ui.weekly.section.overview": {"zh": "🧭 总览", "en": "🧭 Overview"},
+    "ui.weekly.overview_line": {
+        "zh": "本周 {games} 场（胜率 {wr}）；上周 {prev_games} 场（胜率 {prev_wr}）。",
+        "en": "This window: {games}G ({wr} WR); previous: {prev_games}G ({prev_wr} WR).",
+    },
+    "ui.weekly.overview_delta": {
+        "zh": "对比：场次 {games_delta:+d}，胜率 {wr_delta:+.1f} pp。",
+        "en": "Δ: games {games_delta:+d}, WR {wr_delta:+.1f} pp.",
+    },
+    "ui.weekly.section.players": {"zh": "🎮 五人战报", "en": "🎮 Squad members"},
+    "ui.weekly.player_line": {
+        "zh": "{name}：{games} 场（胜率 {wr}） · KDA {kda} · 主玩 {hero} ({hero_wins}/{hero_games})",
+        "en": "{name}: {games}G ({wr}) · KDA {kda} · most {hero} ({hero_wins}/{hero_games})",
+    },
+    "ui.weekly.player_line_no_hero": {
+        "zh": "{name}：{games} 场（胜率 {wr}） · KDA {kda}",
+        "en": "{name}: {games}G ({wr}) · KDA {kda}",
+    },
+    "ui.weekly.section.awards": {"zh": "🏆 MVP 奖项", "en": "🏆 MVP awards"},
+    "ui.weekly.award.god_kda":  {"zh": "战神 (KDA)",   "en": "MVP (KDA)"},
+    "ui.weekly.award.dmg_king": {"zh": "输出王 (英伤)", "en": "Damage king"},
+    "ui.weekly.award.healer":   {"zh": "主治疗",       "en": "Healer"},
+    "ui.weekly.award.tank":     {"zh": "钢铁防线 (承伤)", "en": "Tank (taken)"},
+    "ui.weekly.award.siege":    {"zh": "推塔王",       "en": "Siege king"},
+    "ui.weekly.award.xp":       {"zh": "经济王 (XP)",   "en": "XP king"},
+    "ui.weekly.award_line": {
+        "zh": "{label}：{name} · {hero} · {value} · {games} 场",
+        "en": "{label}: {name} · {hero} · {value} · {games}G",
+    },
+    "ui.weekly.section.highlights": {"zh": "✨ 高光对局", "en": "✨ Highlight matches"},
+    "ui.weekly.highlight_line": {
+        "zh": "{when} · {name} · {hero} · {map} · {result} · KDA {kda} · 英伤 {hd}",
+        "en": "{when} · {name} · {hero} · {map} · {result} · KDA {kda} · HeroDmg {hd}",
+    },
+    "ui.weekly.match_won":  {"zh": "胜", "en": "WIN"},
+    "ui.weekly.match_lost": {"zh": "负", "en": "LOSS"},
+    "ui.weekly.section.heroes": {"zh": "🦸 英雄池", "en": "🦸 Hero pool"},
+    "ui.weekly.heroes_top_picked": {"zh": "出场最多：", "en": "Most picked:"},
+    "ui.weekly.heroes_top_wr":     {"zh": "胜率最高：", "en": "Best winrate:"},
+    "ui.weekly.hero_chip": {
+        "zh": "{hero} {wins}/{games} ({wr})",
+        "en": "{hero} {wins}/{games} ({wr})",
+    },
+    "ui.weekly.section.maps": {"zh": "🗺️ 地图表现", "en": "🗺️ Map breakdown"},
+    "ui.weekly.map_line": {
+        "zh": "{map}：{wins}/{games}（胜率 {wr}）",
+        "en": "{map}: {wins}/{games} ({wr})",
+    },
+    "ui.weekly.section.streaks": {"zh": "🔥 连胜连败", "en": "🔥 Streaks"},
+    "ui.weekly.streak_win": {
+        "zh": "最长连胜：{n} 连胜（{start} → {end}）",
+        "en": "Longest win streak: {n}W ({start} → {end})",
+    },
+    "ui.weekly.streak_loss": {
+        "zh": "最长连败：{n} 连败（{start} → {end}）",
+        "en": "Longest loss streak: {n}L ({start} → {end})",
+    },
+    "ui.weekly.streak_none_win": {"zh": "本周暂无连胜", "en": "no win streak"},
+    "ui.weekly.streak_none_loss": {"zh": "本周暂无连败", "en": "no loss streak"},
+
     "ui.popup.region.no_screenshot_title": {"zh": "无截图", "en": "No screenshot"},
     "ui.popup.region.no_screenshot_body": {
         "zh": "当前没有可用截图。请先按快捷键截屏。",
