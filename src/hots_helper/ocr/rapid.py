@@ -53,24 +53,54 @@ class _LangSpec:
     tag: str
     rec_model_path: Path | None  # None = use rapidocr's bundled default
     rec_img_shape: tuple[int, int, int] | None  # None = use rapidocr's default
+    # Optional override for the detection model and the recogniser's
+    # character dictionary. ``None`` falls back to the rapidocr-bundled
+    # PP-OCRv4 det / rec-default keys.
+    det_model_path: Path | None = None
+    rec_keys_path: Path | None = None
 
 
 # Order matters only for log messages — confidence merge is order-independent.
+#
+# We standardise on **PP-OCRv5 mobile** for cn+en and Korean. Compared to
+# the v4 / v1 mobile models the rapidocr wheel ships, v5 is
+# significantly stronger at small / slanted UI text — directly improving
+# player-name recognition on the slanted KR-server BP screens we kept
+# missing under v4. The shared v5 detector also boosts recall for both
+# language passes.
+#
+# Models live in ``ocr/models/``:
+#   * ``ppocrv5_mobile_det.onnx``         — det shared by all passes (4.6 MB)
+#   * ``ppocrv5_mobile_rec.onnx`` + ``ppocrv5_keys_v1.txt`` — cn+en rec (16 MB)
+#   * ``korean_ppocrv5_mobile_rec.onnx`` + ``korean_ppocrv5_keys_v1.txt``
+#                                          — korean rec (13 MB)
+#
+# We also have ``ppocrv5_server_*`` variants (84 + 81 MB) bundled for
+# completeness, but the wall-clock cost (~50 s per screenshot vs ~5 s
+# for mobile) doesn't justify the marginal +1 slot accuracy gain on
+# our test set — squad members run this on a hotkey during the live
+# BP draft phase. Mobile stays the default; switching to server is a
+# tweak in this file when GPU acceleration is available.
 _LANGS: tuple[_LangSpec, ...] = (
-    # Bundled CN+EN model. Path stays None so rapidocr resolves its own
-    # default at engine-init time (the .onnx ships inside the wheel).
-    _LangSpec(tag="cn+en", rec_model_path=None, rec_img_shape=None),
+    _LangSpec(
+        tag="cn+en",
+        det_model_path=_MODELS_DIR / "ppocrv5_mobile_det.onnx",
+        rec_model_path=_MODELS_DIR / "ppocrv5_mobile_rec.onnx",
+        rec_keys_path=_MODELS_DIR / "ppocrv5_keys_v1.txt",
+        rec_img_shape=(3, 48, 320),
+    ),
     _LangSpec(
         tag="korean",
-        rec_model_path=_MODELS_DIR / "korean_mobile_v2.0_rec_infer.onnx",
-        # PP-OCRv1 Korean model accepts the default 48-tall input fine.
-        rec_img_shape=None,
+        det_model_path=_MODELS_DIR / "ppocrv5_mobile_det.onnx",
+        rec_model_path=_MODELS_DIR / "korean_ppocrv5_mobile_rec.onnx",
+        rec_keys_path=_MODELS_DIR / "korean_ppocrv5_keys_v1.txt",
+        rec_img_shape=(3, 48, 320),
     ),
     _LangSpec(
         tag="japanese",
         rec_model_path=_MODELS_DIR / "japan_rec_crnn.onnx",
         # The Japanese CRNN model has a fixed input height of 32 rather
-        # than the 48 PP-OCRv4 expects — pass the right shape so
+        # than the 48 PP-OCRv5 expects — pass the right shape so
         # rapidocr's normaliser doesn't squash the glyphs.
         rec_img_shape=(3, 32, 320),
     ),
@@ -94,12 +124,24 @@ def _get_engine(spec: _LangSpec):
     from rapidocr_onnxruntime import RapidOCR
 
     kwargs: dict = {}
+    if spec.det_model_path is not None:
+        if not spec.det_model_path.is_file():
+            raise FileNotFoundError(
+                f"missing OCR det model {spec.det_model_path}"
+            )
+        kwargs["det_model_path"] = str(spec.det_model_path)
     if spec.rec_model_path is not None:
         if not spec.rec_model_path.is_file():
             raise FileNotFoundError(
-                f"missing OCR model {spec.rec_model_path}"
+                f"missing OCR rec model {spec.rec_model_path}"
             )
         kwargs["rec_model_path"] = str(spec.rec_model_path)
+    if spec.rec_keys_path is not None:
+        if not spec.rec_keys_path.is_file():
+            raise FileNotFoundError(
+                f"missing OCR rec dict {spec.rec_keys_path}"
+            )
+        kwargs["rec_keys_path"] = str(spec.rec_keys_path)
     if spec.rec_img_shape is not None:
         kwargs["rec_img_shape"] = list(spec.rec_img_shape)
     engine = RapidOCR(**kwargs)
