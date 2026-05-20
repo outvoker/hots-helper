@@ -292,7 +292,11 @@ class HotkeyWorker(QObject):
                 self.progress.emit("[3/3] Parsing names from OCR blocks…")
                 try:
                     from ..vision import parse_screenshot
-                    parsed = parse_screenshot(screenshot_path, blocks=blocks)
+                    parsed = parse_screenshot(
+                        screenshot_path,
+                        blocks=blocks,
+                        languages=self._ocr_languages,
+                    )
                     map_name = parsed.map_name
                     allies = list(parsed.ally_names)
                     enemies = list(parsed.enemy_names)
