@@ -72,6 +72,22 @@ class RegionSelectorDialog(QDialog):
         self._hint.adjustSize()
         self._hint.move(20, 20)
 
+    def showEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
+        # The popup that spawns us runs at NSPopUpMenuWindowLevel (101)
+        # on macOS so it floats over fullscreen games. Qt's plain
+        # ``WindowStaysOnTopHint`` only puts us at the regular
+        # always-on-top level (~3), so the screenshot ends up *behind*
+        # the popup. Bumping the dialog's NSWindow to the same overlay
+        # level via :func:`make_overlay_floating` keeps it visibly on
+        # top of everything, including the popup that opened it.
+        super().showEvent(ev)
+        try:
+            from .macos_overlay import make_overlay_floating
+            make_overlay_floating(self, above_overlay=True)
+        except Exception:
+            pass
+        self.raise_()
+
     # --- mouse handling -----------------------------------------------------
 
     def mousePressEvent(self, ev) -> None:  # type: ignore[no-untyped-def]
