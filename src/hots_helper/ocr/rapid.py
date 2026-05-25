@@ -346,6 +346,175 @@ def _run_pass(
 # --- public API -----------------------------------------------------------
 
 
+def _build_blocks_from_rec(
+    dt_boxes_orig,
+    rec_res,
+    img_w: float,
+    img_h: float,
+    text_score: float,
+) -> list[OcrBlock]:
+    """Stitch shared dt_boxes + per-lang rec_res into ``OcrBlock`` list.
+
+    Mirrors what RapidOCR's ``get_final_res`` + ``filter_result`` do
+    internally — drop entries whose rec confidence is under the
+    engine's ``text_score`` threshold, take the bbox from the det
+    pass (which is shared across langs), and emit normalised
+    coordinates.
+    """
+    blocks: list[OcrBlock] = []
+    for box, rec in zip(dt_boxes_orig, rec_res):
+        text = (rec[0] or "").strip()
+        conf = float(rec[1] or 0.0)
+        if not text or conf < text_score:
+            continue
+        xs = box[:, 0]
+        ys = box[:, 1]
+        x0 = float(xs.min()); x1 = float(xs.max())
+        y0 = float(ys.min()); y1 = float(ys.max())
+        blocks.append(OcrBlock(
+            text=text,
+            bbox=(x0 / img_w, y0 / img_h, x1 / img_w, y1 / img_h),
+            confidence=conf,
+        ))
+    return blocks
+
+
+def _run_shared_det_passes(
+    image_input,
+    img_w: float,
+    img_h: float,
+    active_langs: tuple[_LangSpec, ...],
+    progress: ProgressCallback,
+) -> list[list[OcrBlock]]:
+    """Run det+cls once, fan out rec across every lang that shares det.
+
+    cn+en and korean both point at ``ppocrv5_mobile_det.onnx``, so on
+    the typical config (cn+en + korean) we save a full det pass per
+    OCR call — and the BP rescue pipeline calls OCR ~10 times per
+    screenshot. Japanese uses rapidocr's bundled v4 det, so when it's
+    enabled it falls back to its own per-engine det+rec round.
+
+    Returns a ``passes`` list compatible with :func:`_merge_blocks`.
+    """
+    shared_det = _MODELS_DIR / "ppocrv5_mobile_det.onnx"
+    shared = [s for s in active_langs if s.det_model_path == shared_det]
+    others = tuple(s for s in active_langs if s.det_model_path != shared_det)
+
+    # Only worth setting up the shared pipeline when at least two
+    # engines actually share det. One lang means we'd just be doing
+    # the same work the regular path does, with extra plumbing.
+    if len(shared) < 2:
+        return _run_active_passes(
+            image_input, img_w, img_h, active_langs, progress,
+        )
+
+    passes: list[list[OcrBlock]] = []
+    primary_spec = shared[0]
+
+    try:
+        primary = _get_engine(primary_spec)
+    except Exception as e:
+        _emit(progress, f"  [shared-det] init failed: {e}")
+        return _run_active_passes(
+            image_input, img_w, img_h, active_langs, progress,
+        )
+
+    # Materialise the image once via the engine's own LoadImage so we
+    # match exactly the colour-channel handling RapidOCR's ``__call__``
+    # would have done (RGB→BGR for PIL/path/bytes; ndarrays kept as-is).
+    try:
+        img = primary.load_img(image_input)
+    except Exception as e:
+        _emit(progress, f"  [shared-det] image load failed: {e}")
+        return _run_active_passes(
+            image_input, img_w, img_h, active_langs, progress,
+        )
+
+    raw_h, raw_w = img.shape[:2]
+    op_record: dict = {}
+    img, ratio_h, ratio_w = primary.preprocess(img)
+    op_record["preprocess"] = {"ratio_h": ratio_h, "ratio_w": ratio_w}
+    img, op_record = primary.maybe_add_letterbox(img, op_record)
+
+    try:
+        t_det = time.monotonic()
+        dt_boxes, _det_elapse = primary.auto_text_det(img)
+    except Exception as e:
+        _emit(progress, f"  [shared-det] det failed: {e}")
+        # Fall through to per-engine path so we still produce *something*.
+        return _run_active_passes(
+            image_input, img_w, img_h, active_langs, progress,
+        )
+
+    if dt_boxes is None:
+        # Det found no text — every shared lang would return [].
+        # Still run any non-shared (Japanese) engines on the original
+        # input in case its det disagrees.
+        if others:
+            passes.extend(_run_active_passes(
+                image_input, img_w, img_h, others, progress,
+            ))
+        return passes
+
+    _emit(
+        progress,
+        f"  [shared-det] {len(dt_boxes)} box(es) in {time.monotonic() - t_det:.2f}s",
+    )
+
+    crop_list = primary.get_crop_img_list(img, dt_boxes)
+
+    # Cls is the same bundled model for every engine and rotates the
+    # crops in-place if any are upside-down — share the result so each
+    # rec pass sees identically oriented input.
+    cls_list = crop_list
+    try:
+        if primary.use_cls:
+            cls_list, _cls_res, _cls_elapse = primary.text_cls(crop_list)
+    except Exception:
+        cls_list = crop_list
+
+    # Project det boxes back to original-image coordinates once.
+    try:
+        dt_boxes_orig = primary._get_origin_points(
+            dt_boxes, op_record, raw_h, raw_w,
+        )
+    except Exception:
+        dt_boxes_orig = dt_boxes
+
+    for spec in shared:
+        try:
+            engine = _get_engine(spec)
+        except Exception as e:
+            _emit(progress, f"  [{spec.tag}] init failed: {e}")
+            continue
+        try:
+            t_rec = time.monotonic()
+            rec_res, _rec_elapse = engine.text_rec(cls_list)
+            blocks = _build_blocks_from_rec(
+                dt_boxes_orig, rec_res, img_w, img_h, engine.text_score,
+            )
+        except Exception as e:
+            _emit(
+                progress,
+                f"  [{spec.tag}] rec failed: {type(e).__name__}: {e}",
+            )
+            continue
+        _emit(
+            progress,
+            f"  [{spec.tag}] {len(blocks)} block(s) in "
+            f"{time.monotonic() - t_rec:.2f}s (shared det)",
+        )
+        passes.append(blocks)
+
+    # Non-shared engines (Japanese) run their own det+rec normally.
+    if others:
+        passes.extend(_run_active_passes(
+            image_input, img_w, img_h, others, progress,
+        ))
+
+    return passes
+
+
 def _resolve_active_langs(languages: list[str] | None) -> tuple[_LangSpec, ...]:
     if languages is None:
         return _LANGS
@@ -432,7 +601,7 @@ def recognize(image_path: Path,
         _emit(progress, f"image stat failed: {e}")
         return []
 
-    passes = _run_active_passes(
+    passes = _run_shared_det_passes(
         image_path, img_w, img_h, active_langs, progress,
     )
 
@@ -491,7 +660,7 @@ def recognize_array(
         img_w = float(arr.shape[1])
 
     active_langs = _resolve_active_langs(languages)
-    passes = _run_active_passes(
+    passes = _run_shared_det_passes(
         engine_input, img_w, img_h, active_langs, progress,
     )
     if not passes:
