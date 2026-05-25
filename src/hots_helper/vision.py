@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .heroes import is_hero_name
-from .ocr import OcrBlock, recognize
+from .ocr import OcrBlock, recognize, recognize_array
 
 
 # --- tunables ----------------------------------------------------------------
@@ -512,20 +512,10 @@ def _ocr_column_image(crop, languages: list[str] | None) -> list[OcrBlock]:
     Coordinates are normalised to the *crop's* dimensions, not the
     original screenshot.
     """
-    import tempfile
-    from PIL import Image  # noqa: F401  (used implicitly by save())
-
     try:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            tmp = Path(f.name)
-        crop.save(tmp)
-        try:
-            blocks = recognize(tmp, languages=languages)
-        finally:
-            tmp.unlink(missing_ok=True)
+        return recognize_array(crop, languages=languages)
     except Exception:
         return []
-    return blocks
 
 
 # Slot Y centres on the **rotated column** image. The five hex slots
@@ -1375,38 +1365,24 @@ def _select_best_player_block(
 
 
 def _ocr_pil_blocks(im, *, languages: list[str] | None) -> list[tuple[str, float]]:
-    """Run OCR over an in-memory PIL image, return every block as (text, conf)."""
-    import tempfile
+    """Run OCR over an in-memory PIL image, return every block as (text, conf).
 
+    Skips the PNG-encode + tempfile round-trip ``recognize`` pays when
+    handed a path. The per-slot rescue pipeline calls this ~10 times
+    per BP screenshot, so the savings compound — especially on Windows
+    where %TEMP% writes are slowed by Defender real-time scanning.
+    """
     try:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            tmp = Path(f.name)
-        im.save(tmp)
-        try:
-            blocks = recognize(tmp, languages=languages)
-        finally:
-            tmp.unlink(missing_ok=True)
+        blocks = recognize_array(im, languages=languages)
     except Exception:
         return []
     return [(b.text.strip(), float(b.confidence)) for b in blocks]
 
 
 def _ocr_pil_image(im, *, languages: list[str] | None) -> tuple[str, float]:
-    """Run OCR over an in-memory PIL image, return (best_text, confidence).
-
-    RapidOCR's public API takes a file path, so we round-trip through
-    a tempfile. The tempfile lives only for the duration of the call.
-    """
-    import tempfile
-
+    """Run OCR over an in-memory PIL image, return (best_text, confidence)."""
     try:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            tmp = Path(f.name)
-        im.save(tmp)
-        try:
-            blocks = recognize(tmp, languages=languages)
-        finally:
-            tmp.unlink(missing_ok=True)
+        blocks = recognize_array(im, languages=languages)
     except Exception:
         return "", 0.0
     if not blocks:

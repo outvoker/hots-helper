@@ -47,3 +47,22 @@ def recognize(image_path: Path,
             progress(f"rapidocr-onnxruntime not installed: {e}")
         return []
     return _r(image_path, progress=progress, languages=languages)
+
+
+def recognize_array(image,
+                    progress: ProgressCallback = None,
+                    languages: list[str] | None = None) -> list[OcrBlock]:
+    """Like :func:`recognize`, but takes a PIL image / ndarray.
+
+    Skips the PNG-encode + tempfile dance ``recognize`` does when fed a
+    path. Use this whenever the caller already holds pixels in memory —
+    significantly faster on Windows because every new file in ``%TEMP%``
+    triggers a Defender scan.
+    """
+    try:
+        from .rapid import recognize_array as _r
+    except ImportError as e:
+        if progress is not None:
+            progress(f"rapidocr-onnxruntime not installed: {e}")
+        return []
+    return _r(image, progress=progress, languages=languages)

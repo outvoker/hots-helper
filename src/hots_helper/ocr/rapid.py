@@ -22,6 +22,7 @@ model and as the right text (high confidence) from the Korean model.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,45 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Optional[Callable[[str], None]]
 
 _MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+
+def _resolve_thread_budget() -> tuple[int, int]:
+    """Per-session ONNX Runtime thread caps.
+
+    Without explicit caps, ORT defaults ``intra_op_num_threads`` to the
+    full logical-core count. With three sessions (det + cn-rec + kr-rec)
+    racing for the same cores plus our other Qt threads, Windows ends up
+    in heavy oversubscription — every core pegs at 100% but wall-clock
+    *increases* because of context-switch thrash. macOS schedules
+    cooperatively enough that the same setup feels fine; Windows
+    doesn't, which is the asymmetry users see in practice.
+
+    Defaults: intra=2, inter=1. Override via ``HOTS_OCR_THREADS=N`` (sets
+    intra) or ``HOTS_OCR_INTRA_THREADS`` / ``HOTS_OCR_INTER_THREADS`` for
+    fine-grained control.
+    """
+    cpu = os.cpu_count() or 4
+
+    def _read(env: str, default: int) -> int:
+        raw = os.environ.get(env)
+        if not raw:
+            return default
+        try:
+            n = int(raw)
+        except ValueError:
+            return default
+        return max(1, min(n, cpu))
+
+    # On 4-core boxes 2 intra-threads is faster than 4 because det/rec
+    # convs are tiny enough that parallel split overhead dominates.
+    # On 8+ core boxes pinning to 2 still wins as long as we run passes
+    # serially (which we do — see comment on _engines below).
+    intra = _read("HOTS_OCR_INTRA_THREADS", _read("HOTS_OCR_THREADS", 2))
+    inter = _read("HOTS_OCR_INTER_THREADS", 1)
+    return intra, inter
+
+
+_INTRA_THREADS, _INTER_THREADS = _resolve_thread_budget()
 
 # Lazy-initialised singletons keyed by language tag. Building each engine
 # costs ~0.5–1 s on a cold start; reuse keeps subsequent screenshots fast.
@@ -144,6 +184,10 @@ def _get_engine(spec: _LangSpec):
         kwargs["rec_keys_path"] = str(spec.rec_keys_path)
     if spec.rec_img_shape is not None:
         kwargs["rec_img_shape"] = list(spec.rec_img_shape)
+    # Pin the ORT thread budget per-session. RapidOCR forwards these
+    # through to onnxruntime's SessionOptions for det / cls / rec.
+    kwargs["intra_op_num_threads"] = _INTRA_THREADS
+    kwargs["inter_op_num_threads"] = _INTER_THREADS
     engine = RapidOCR(**kwargs)
     _engines[spec.tag] = engine
     return engine
@@ -232,12 +276,24 @@ def _merge_blocks(passes: list[list[OcrBlock]],
 
 def _run_pass(
     engine,
-    image_path: Path,
+    image_input,
     img_w: float,
     img_h: float,
 ) -> list[OcrBlock]:
+    """Invoke a RapidOCR engine on ``image_input``.
+
+    ``image_input`` may be a filesystem path (``str`` / ``Path``) or an
+    in-memory ``numpy.ndarray`` already loaded as RGB / BGR pixels —
+    RapidOCR's ``LoadImage`` handles either. The ndarray fast path is
+    what callers use to skip a PNG-encode + tempfile round-trip on every
+    crop, which is the dominant cost of the per-slot rescue pipeline on
+    Windows (Defender scans every new .png in %TEMP%).
+    """
     try:
-        result, _elapse = engine(str(image_path))
+        if isinstance(image_input, (str, Path)):
+            result, _elapse = engine(str(image_input))
+        else:
+            result, _elapse = engine(image_input)
     except Exception as e:
         logger.exception("RapidOCR call failed: %s", e)
         return []
@@ -266,51 +322,35 @@ def _run_pass(
 # --- public API -----------------------------------------------------------
 
 
-def recognize(image_path: Path,
-              progress: ProgressCallback = None,
-              languages: list[str] | None = None) -> list[OcrBlock]:
-    """Run RapidOCR over ``image_path``.
-
-    ``languages`` selects which engines run; values must match the
-    ``tag`` field of one of :data:`_LANGS`. ``None`` means "use every
-    bundled engine" — useful for one-off scripts. The UI passes its
-    user-configured subset (cheaper to run fewer passes; each one is
-    ~1s of wall time).
-    """
-    t0 = time.monotonic()
-    _emit(progress, "loading RapidOCR engines…")
-
-    # Resolve which engine specs to actually run this call.
+def _resolve_active_langs(languages: list[str] | None) -> tuple[_LangSpec, ...]:
     if languages is None:
-        active_langs = _LANGS
-    else:
-        wanted = set(languages)
-        active_langs = tuple(s for s in _LANGS if s.tag in wanted)
-        if not active_langs:
-            # Empty / all-unknown selection — fall back to CN+EN so we
-            # don't silently return zero blocks. CN+EN is the cheapest
-            # pass and covers the squad's most common case.
-            active_langs = tuple(s for s in _LANGS if s.tag == "cn+en")
+        return _LANGS
+    wanted = set(languages)
+    active = tuple(s for s in _LANGS if s.tag in wanted)
+    if not active:
+        # Empty / all-unknown selection — fall back to CN+EN so we
+        # don't silently return zero blocks. CN+EN is the cheapest
+        # pass and covers the squad's most common case.
+        return tuple(s for s in _LANGS if s.tag == "cn+en")
+    return active
 
-    # Resolve image dimensions once so every pass produces normalised bboxes.
-    img_w: float
-    img_h: float
-    try:
-        from PIL import Image
-        with Image.open(image_path) as im:
-            img_w, img_h = float(im.size[0]), float(im.size[1])
-    except Exception as e:
-        _emit(progress, f"image stat failed: {e}")
-        return []
 
+def _run_active_passes(
+    image_input,
+    img_w: float,
+    img_h: float,
+    active_langs: tuple[_LangSpec, ...],
+    progress: ProgressCallback,
+) -> list[list[OcrBlock]]:
     # Run each language's recognition pass serially. Parallelising
     # them via a thread pool sounded great on paper (each engine has
     # its own ONNX session, sessions are thread-safe) but in practice
     # ONNX Runtime sessions saturate every core by default; three
     # sessions racing for the same cores caused massive thread
     # oversubscription and pushed wall-clock from ~2.5s sequential
-    # to ~40s "parallel". Until we share the det stage or pin
-    # per-session thread counts, serial is faster.
+    # to ~40s "parallel". Per-session thread caps in ``_get_engine``
+    # mitigate this, but serial is still faster on the typical 4-core
+    # Windows laptop.
     passes: list[list[OcrBlock]] = []
     for spec in active_langs:
         try:
@@ -326,7 +366,7 @@ def recognize(image_path: Path,
             continue
         try:
             t_pass = time.monotonic()
-            blocks = _run_pass(engine, image_path, img_w, img_h)
+            blocks = _run_pass(engine, image_input, img_w, img_h)
             logger.info(
                 "  [%s] %d block(s) in %.2fs",
                 spec.tag, len(blocks), time.monotonic() - t_pass,
@@ -338,6 +378,39 @@ def recognize(image_path: Path,
                 progress,
                 f"  [{spec.tag}] failed: {type(e).__name__}: {e}",
             )
+    return passes
+
+
+def recognize(image_path: Path,
+              progress: ProgressCallback = None,
+              languages: list[str] | None = None) -> list[OcrBlock]:
+    """Run RapidOCR over ``image_path``.
+
+    ``languages`` selects which engines run; values must match the
+    ``tag`` field of one of :data:`_LANGS`. ``None`` means "use every
+    bundled engine" — useful for one-off scripts. The UI passes its
+    user-configured subset (cheaper to run fewer passes; each one is
+    ~1s of wall time).
+    """
+    t0 = time.monotonic()
+    _emit(progress, "loading RapidOCR engines…")
+
+    active_langs = _resolve_active_langs(languages)
+
+    # Resolve image dimensions once so every pass produces normalised bboxes.
+    img_w: float
+    img_h: float
+    try:
+        from PIL import Image
+        with Image.open(image_path) as im:
+            img_w, img_h = float(im.size[0]), float(im.size[1])
+    except Exception as e:
+        _emit(progress, f"image stat failed: {e}")
+        return []
+
+    passes = _run_active_passes(
+        image_path, img_w, img_h, active_langs, progress,
+    )
 
     if not passes:
         _emit(progress, "no OCR engines available — returning empty result")
@@ -350,3 +423,53 @@ def recognize(image_path: Path,
         f"in {time.monotonic() - t0:.2f}s",
     )
     return merged
+
+
+def recognize_array(
+    image,
+    progress: ProgressCallback = None,
+    languages: list[str] | None = None,
+) -> list[OcrBlock]:
+    """Run RapidOCR over an in-memory image (PIL or ndarray).
+
+    Skips the PNG-encode + tempfile round-trip that ``recognize`` pays
+    when callers already have the pixels in memory. Used by the per-slot
+    rescue pipeline in :mod:`hots_helper.vision`, which calls OCR ~10
+    times per BP screenshot — the saved IO compounds to a couple of
+    seconds on Windows where Defender scans every new file in %TEMP%.
+
+    Note on colour order: RapidOCR's ``LoadImage`` does an RGB→BGR
+    convert when handed a ``PIL.Image.Image`` / ``str`` / ``Path`` /
+    ``bytes`` (it assumes those are RGB), but treats raw ``ndarray``
+    inputs as already-BGR. To stay consistent with the path-based
+    entry point, we forward PIL images straight through, and assume
+    raw ndarrays are BGR — callers that pass an ``np.asarray(pil)``
+    directly would be feeding wrong-channel data, so they must
+    convert first.
+    """
+    if image is None:
+        return []
+
+    if hasattr(image, "convert"):
+        # PIL.Image.Image — RapidOCR handles this directly and applies
+        # the RGB→BGR convert on its end.
+        pil = image.convert("RGB")
+        engine_input = pil
+        img_w = float(pil.width)
+        img_h = float(pil.height)
+    else:
+        import numpy as np
+        arr = np.asarray(image)
+        if arr.ndim < 2:
+            return []
+        engine_input = arr
+        img_h = float(arr.shape[0])
+        img_w = float(arr.shape[1])
+
+    active_langs = _resolve_active_langs(languages)
+    passes = _run_active_passes(
+        engine_input, img_w, img_h, active_langs, progress,
+    )
+    if not passes:
+        return []
+    return _merge_blocks(passes)

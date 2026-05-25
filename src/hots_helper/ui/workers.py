@@ -466,11 +466,10 @@ class ChatCropTranslateWorker(QObject):
         self._ocr_languages: list[str] | None = ocr_languages
 
     def run(self) -> None:
-        import tempfile
         from PIL import Image
 
         from ..chat_ocr import filter_chat_blocks
-        from ..ocr import recognize
+        from ..ocr import recognize_array
         from ..translate import TranslateError, translate
 
         log_lines: list[str] = []
@@ -489,9 +488,6 @@ class ChatCropTranslateWorker(QObject):
                     (0, 0, 0),
                 )
                 padded.paste(crop, (pad, pad))
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                    tmp_path = Path(f.name)
-                padded.save(tmp_path)
         except Exception as e:
             log_lines.append(f"[1/3 crop error] {type(e).__name__}: {e}")
             log_lines.append(traceback.format_exc())
@@ -502,12 +498,15 @@ class ChatCropTranslateWorker(QObject):
             ))
             return
 
-        # 2. OCR the crop.
+        # 2. OCR the crop directly from memory — RapidOCR's pipeline
+        # already accepts ndarray, so we skip writing the padded crop
+        # to %TEMP% and reading it back. On Windows this also dodges
+        # Defender's per-file scan.
         self.progress.emit("[2/3] 识别选中区域文字…")
         t1 = time.monotonic()
         try:
-            blocks = recognize(
-                tmp_path,
+            blocks = recognize_array(
+                padded,
                 progress=lambda m: self.progress.emit(f"      {m}"),
                 languages=self._ocr_languages,
             )
@@ -523,8 +522,6 @@ class ChatCropTranslateWorker(QObject):
                 log_lines=log_lines,
             ))
             return
-        finally:
-            tmp_path.unlink(missing_ok=True)
 
         chat = filter_chat_blocks(blocks)
         log_lines.append(

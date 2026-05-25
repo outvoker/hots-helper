@@ -177,8 +177,7 @@ def ocr_crop(screenshot_path: Path, x: int, y: int, w: int, h: int) -> str:
     Returns the highest-confidence text the OCR engine produced inside
     the crop, or the empty string when nothing readable was found.
     """
-    from ..ocr import recognize
-    import tempfile
+    from ..ocr import recognize_array
 
     with Image.open(screenshot_path) as im:
         crop = im.crop((x, y, x + w, y + h))
@@ -186,13 +185,7 @@ def ocr_crop(screenshot_path: Path, x: int, y: int, w: int, h: int) -> str:
         pad = 8
         padded = Image.new("RGB", (crop.width + 2 * pad, crop.height + 2 * pad), (0, 0, 0))
         padded.paste(crop, (pad, pad))
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            tmp = Path(f.name)
-        padded.save(tmp)
-    try:
-        blocks = recognize(tmp)
-    finally:
-        tmp.unlink(missing_ok=True)
+    blocks = recognize_array(padded)
     if not blocks:
         return ""
     best = max(blocks, key=lambda b: b.confidence)
