@@ -37,20 +37,43 @@ ProgressCallback = Optional[Callable[[str], None]]
 _MODELS_DIR = Path(__file__).resolve().parent / "models"
 
 
-def _resolve_thread_budget() -> tuple[int, int]:
-    """Per-session ONNX Runtime thread caps.
+def _default_intra_threads(cpu: int) -> int:
+    """Pick a sensible intra_op_num_threads default for the host CPU.
 
     Without explicit caps, ORT defaults ``intra_op_num_threads`` to the
     full logical-core count. With three sessions (det + cn-rec + kr-rec)
-    racing for the same cores plus our other Qt threads, Windows ends up
-    in heavy oversubscription — every core pegs at 100% but wall-clock
-    *increases* because of context-switch thrash. macOS schedules
-    cooperatively enough that the same setup feels fine; Windows
-    doesn't, which is the asymmetry users see in practice.
+    racing for the same cores plus our Qt threads — and the game itself
+    chewing cores during a live draft — Windows pegs every core at 100%
+    while wall-clock *increases* due to context-switch thrash.
 
-    Defaults: intra=2, inter=1. Override via ``HOTS_OCR_THREADS=N`` (sets
-    intra) or ``HOTS_OCR_INTRA_THREADS`` / ``HOTS_OCR_INTER_THREADS`` for
-    fine-grained control.
+    Two countervailing forces shape the policy:
+
+    * Lower bound — passes run serially (one engine active at a time),
+      so the active engine is allowed a healthy slice of cores.
+    * Upper bound — PP-OCRv5 mobile is a small graph (~16 MB).
+      Past ~6 threads the parallel-split overhead starts cancelling
+      the gains, and the user is also running the game next to us.
+
+    Empirically the sweet spot scales sub-linearly with logical core
+    count — a 4-core laptop wants ~2, a 6P+4E hybrid like the
+    i5-13400F (16 logical) wants ~6, a HEDT box doesn't keep getting
+    faster past 8.
+    """
+    if cpu <= 4:
+        return 2
+    if cpu <= 8:
+        return 4
+    if cpu <= 16:
+        return 6
+    return 8
+
+
+def _resolve_thread_budget() -> tuple[int, int]:
+    """Per-session ORT thread caps; intra scaled to the host CPU.
+
+    Override either with env vars: ``HOTS_OCR_THREADS=N`` sets intra,
+    ``HOTS_OCR_INTRA_THREADS`` / ``HOTS_OCR_INTER_THREADS`` for
+    fine-grained control. Useful for A/B'ing on a specific machine.
     """
     cpu = os.cpu_count() or 4
 
@@ -64,16 +87,17 @@ def _resolve_thread_budget() -> tuple[int, int]:
             return default
         return max(1, min(n, cpu))
 
-    # On 4-core boxes 2 intra-threads is faster than 4 because det/rec
-    # convs are tiny enough that parallel split overhead dominates.
-    # On 8+ core boxes pinning to 2 still wins as long as we run passes
-    # serially (which we do — see comment on _engines below).
-    intra = _read("HOTS_OCR_INTRA_THREADS", _read("HOTS_OCR_THREADS", 2))
+    default_intra = _default_intra_threads(cpu)
+    intra = _read("HOTS_OCR_INTRA_THREADS", _read("HOTS_OCR_THREADS", default_intra))
     inter = _read("HOTS_OCR_INTER_THREADS", 1)
     return intra, inter
 
 
 _INTRA_THREADS, _INTER_THREADS = _resolve_thread_budget()
+logger.info(
+    "RapidOCR thread budget: intra=%d inter=%d (cpu_count=%s)",
+    _INTRA_THREADS, _INTER_THREADS, os.cpu_count(),
+)
 
 # Lazy-initialised singletons keyed by language tag. Building each engine
 # costs ~0.5–1 s on a cold start; reuse keeps subsequent screenshots fast.
