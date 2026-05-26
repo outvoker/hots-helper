@@ -220,7 +220,12 @@ class Store:
         ``executescript`` would abort partway. We catch and let ``_migrate``
         (which runs right after) bring the schema up to date.
         """
-        with _SCHEMA_PATH.open() as f:
+        # schema.sql is authored as UTF-8. On Windows, Python defaults
+        # text-mode opens to the system code page (GBK on zh-CN locales),
+        # which chokes on any non-ASCII byte in the file (e.g. an em-dash
+        # inside a SQL comment) with "gbk codec can't decode byte 0x94".
+        # Pin the encoding so it works the same on every host.
+        with _SCHEMA_PATH.open(encoding="utf-8") as f:
             script = f.read()
         try:
             self.conn.executescript(script)
