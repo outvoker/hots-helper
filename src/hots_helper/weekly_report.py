@@ -297,45 +297,44 @@ def _compute_players(rows: list[Any], display_names: dict[str, str]) -> list[Pla
     return out
 
 
-def _avg_role_contribution(
-    rows: list[Any], handle: str, *, field_name: str, threshold: int
-) -> tuple[float, int]:
-    """Average of ``field_name`` for ``handle``, restricted to games where
-    the metric exceeded ``threshold`` (so a tank's solo-tank stat doesn't
-    get diluted by the games they played a non-tank hero).
+def _award_score(
+    rows: list[Any], handle: str, *,
+    field_name: str, threshold: int = 0,
+) -> tuple[float, int, str]:
+    """Average of ``field_name`` for ``handle`` plus the player's
+    most-played hero **within the qualifying games**.
 
-    Returns ``(avg, games_counted)``.
+    ``threshold > 0`` gates role awards (healer/tank) so a tank's
+    solo-tank stat isn't diluted by their non-tank games — and the
+    representative hero is picked from those same qualifying games,
+    so 主治疗 doesn't end up labelled with a tank hero.
+
+    Returns ``(avg, games_counted, hero)``.
     """
     total = 0
     n = 0
+    by_hero: dict[str, int] = {}
     for r in rows:
         if r["toon_handle"] != handle:
             continue
         v = _sanitised(r[field_name])
-        if v <= threshold:
+        if threshold > 0 and v <= threshold:
             continue
         total += v
         n += 1
-    return ((total / n) if n else 0.0, n)
+        hero = r["hero"] or "?"
+        by_hero[hero] = by_hero.get(hero, 0) + 1
+    if n == 0:
+        return 0.0, 0, ""
+    hero = max(by_hero.items(), key=lambda kv: kv[1])[0]
+    return total / n, n, hero
 
 
-def _avg_metric(rows: list[Any], handle: str, *, field_name: str
-                ) -> tuple[float, int]:
-    """Plain average over all games (sanity-bounded)."""
-    total = 0
-    n = 0
-    for r in rows:
-        if r["toon_handle"] != handle:
-            continue
-        v = _sanitised(r[field_name])
-        total += v
-        n += 1
-    return ((total / n) if n else 0.0, n)
-
-
-def _avg_kda(rows: list[Any], handle: str) -> tuple[float, int]:
+def _award_score_kda(rows: list[Any], handle: str) -> tuple[float, int, str]:
+    """KDA over all of ``handle``'s games, plus their most-played hero."""
     k = d = a = 0
     n = 0
+    by_hero: dict[str, int] = {}
     for r in rows:
         if r["toon_handle"] != handle:
             continue
@@ -343,24 +342,13 @@ def _avg_kda(rows: list[Any], handle: str) -> tuple[float, int]:
         d += int(r["deaths"] or 0)
         a += int(r["assists"] or 0)
         n += 1
+        hero = r["hero"] or "?"
+        by_hero[hero] = by_hero.get(hero, 0) + 1
     if n == 0:
-        return 0.0, 0
+        return 0.0, 0, ""
     kda = (k + a) / max(d, 1)  # avoid div0; same convention as the rest of the app
-    return kda, n
-
-
-def _hero_for_handle(rows: list[Any], handle: str) -> str:
-    """Most-played hero for ``handle`` in the window. Used as the MVP
-    award's representative hero so the line reads "战神：laolang ·
-    狐尾 · KDA 5.6" instead of an anonymous winner."""
-    by_hero: dict[str, int] = {}
-    for r in rows:
-        if r["toon_handle"] != handle:
-            continue
-        by_hero[r["hero"] or "?"] = by_hero.get(r["hero"] or "?", 0) + 1
-    if not by_hero:
-        return ""
-    return max(by_hero.items(), key=lambda kv: kv[1])[0]
+    hero = max(by_hero.items(), key=lambda kv: kv[1])[0]
+    return kda, n, hero
 
 
 def _compute_awards(
@@ -373,45 +361,48 @@ def _compute_awards(
     awards: list[MvpAward] = []
 
     def _winner(label: str, scoring) -> None:
-        """``scoring(handle) -> (value, games)``. Top value wins; ties broken
-        by more games (more reliable signal). Contestants with games=0
-        are dropped."""
-        contestants: list[tuple[float, int, str]] = []
+        """``scoring(handle) -> (value, games, hero)``. Top value wins;
+        ties broken by more games (more reliable signal). Contestants
+        with games=0 are dropped. The representative hero comes from
+        the scoring function so role awards (healer/tank) display a
+        hero from the *qualifying* games, not the player's most-played
+        hero across the whole window."""
+        contestants: list[tuple[float, int, str, str]] = []
         for h in handles:
-            v, n = scoring(h)
+            v, n, hero = scoring(h)
             if n <= 0:
                 continue
-            contestants.append((v, n, h))
+            contestants.append((v, n, h, hero))
         if not contestants:
             return
         contestants.sort(key=lambda t: (-t[0], -t[1]))
-        v, n, h = contestants[0]
+        v, n, h, hero = contestants[0]
         awards.append(
             MvpAward(
                 label_key=label,
                 display_name=display_names.get(h) or h,
-                hero=_hero_for_handle(rows, h),
+                hero=hero,
                 value=v,
                 games=n,
             )
         )
 
     _winner("ui.weekly.award.god_kda",
-            lambda h: _avg_kda(rows, h))
+            lambda h: _award_score_kda(rows, h))
     _winner("ui.weekly.award.dmg_king",
-            lambda h: _avg_metric(rows, h, field_name="hero_damage"))
+            lambda h: _award_score(rows, h, field_name="hero_damage"))
     _winner("ui.weekly.award.healer",
-            lambda h: _avg_role_contribution(
+            lambda h: _award_score(
                 rows, h, field_name="healing", threshold=_HEAL_THRESHOLD,
             ))
     _winner("ui.weekly.award.tank",
-            lambda h: _avg_role_contribution(
+            lambda h: _award_score(
                 rows, h, field_name="damage_taken", threshold=_TAKEN_THRESHOLD,
             ))
     _winner("ui.weekly.award.siege",
-            lambda h: _avg_metric(rows, h, field_name="structure_damage"))
+            lambda h: _award_score(rows, h, field_name="structure_damage"))
     _winner("ui.weekly.award.xp",
-            lambda h: _avg_metric(rows, h, field_name="xp"))
+            lambda h: _award_score(rows, h, field_name="xp"))
     return awards
 
 
