@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -507,6 +507,13 @@ class MainWindow(QMainWindow):
         # Kick off a startup sync if the user has configured cloud creds.
         if self._cloud_sync is not None and self.config.sync_auto:
             self._start_sync(force=False)
+        # Auto-scan the configured replay folders so the user doesn't have
+        # to remember to click "Start scan" after each app launch. The
+        # scan_index cache makes this near-free on subsequent runs (only
+        # files with changed mtime/size get parsed). Defer to the next
+        # event-loop tick so the main window paints first.
+        if self.config.auto_scan_on_start and self.config.effective_replay_dirs():
+            QTimer.singleShot(0, self._start_scan)
 
     # --- primary feature cards ---------------------------------------------
 

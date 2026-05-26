@@ -144,6 +144,10 @@ class Config:
     launcher_y: int = -1
     # If True, run the watcher in the background on UI start.
     auto_watch: bool = True
+    # If True, kick off a directory scan once the main window has settled.
+    # Cheap on subsequent launches because scan_index lets us skip every
+    # already-seen file without parsing it.
+    auto_scan_on_start: bool = True
     # UI locale, "zh" or "en".
     language: str = "zh"
     # OCR language packs to run. Each tag corresponds to one engine in
@@ -185,6 +189,7 @@ class Config:
             launcher_x=int(raw.get("launcher_x") or -1),
             launcher_y=int(raw.get("launcher_y") or -1),
             auto_watch=bool(raw.get("auto_watch", True)),
+            auto_scan_on_start=bool(raw.get("auto_scan_on_start", True)),
             language=str(raw.get("language") or "zh"),
             ocr_languages=_load_ocr_languages(raw.get("ocr_languages")),
             supabase_url=str(raw.get("supabase_url") or ""),

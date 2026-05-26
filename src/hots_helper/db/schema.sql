@@ -95,3 +95,17 @@ CREATE INDEX IF NOT EXISTS idx_pm_name   ON player_match(display_name);
 CREATE INDEX IF NOT EXISTS idx_pm_hero   ON player_match(hero);
 CREATE INDEX IF NOT EXISTS idx_pm_heroid ON player_match(hero_id);
 CREATE INDEX IF NOT EXISTS idx_pm_replay ON player_match(replay_id);
+
+-- Per-machine cache of files we've already inspected during a directory
+-- scan, keyed by absolute path + (mtime_ns, size) fingerprint. Lets us
+-- skip the expensive parse_replay()/sha256 work for files that haven't
+-- changed since the last scan. Strictly LOCAL — never synced to cloud,
+-- because every squad member's replay folder layout is different and
+-- the fingerprints would collide / be useless cross-machine.
+CREATE TABLE IF NOT EXISTS scan_index (
+    path         TEXT PRIMARY KEY,
+    mtime_ns     INTEGER NOT NULL,
+    size         INTEGER NOT NULL,
+    file_hash    TEXT NOT NULL DEFAULT '',
+    last_seen_at TEXT NOT NULL
+);

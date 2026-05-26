@@ -300,6 +300,21 @@ class Store:
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_replays_match_key ON replays(match_key) "
             "WHERE match_key != ''"
         )
+
+        # scan_index was added later; older DBs from before incremental
+        # scan support need the table created here. Local-only — never
+        # synced (see schema.sql for rationale).
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scan_index (
+                path         TEXT PRIMARY KEY,
+                mtime_ns     INTEGER NOT NULL,
+                size         INTEGER NOT NULL,
+                file_hash    TEXT NOT NULL DEFAULT '',
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
         self.conn.commit()
 
     # --- ingest ---------------------------------------------------------------
@@ -309,6 +324,40 @@ class Store:
             "SELECT 1 FROM replays WHERE file_hash = ?", (file_hash,)
         ).fetchone()
         return row is not None
+
+    # --- scan_index (local-only, not synced) ---------------------------------
+
+    def scan_index_has(self, path: str, mtime_ns: int, size: int) -> bool:
+        """Return True if we've already inspected this exact file revision.
+
+        The fingerprint is ``(path, mtime_ns, size)`` — weaker than a full
+        SHA-256 (a user who renames or re-saves a file will defeat it),
+        but the upsert in :meth:`upsert_replay` is idempotent on
+        ``file_hash`` / ``match_key`` so a false-negative here just means
+        one extra parse, never a stats corruption.
+        """
+        row = self.conn.execute(
+            "SELECT 1 FROM scan_index WHERE path = ? AND mtime_ns = ? AND size = ? LIMIT 1",
+            (path, mtime_ns, size),
+        ).fetchone()
+        return row is not None
+
+    def scan_index_touch(self, path: str, mtime_ns: int, size: int,
+                         file_hash: str, seen_at: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO scan_index (path, mtime_ns, size, file_hash, last_seen_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    mtime_ns = excluded.mtime_ns,
+                    size = excluded.size,
+                    file_hash = excluded.file_hash,
+                    last_seen_at = excluded.last_seen_at
+                """,
+                (path, mtime_ns, size, file_hash, seen_at),
+            )
+            self.conn.commit()
 
     def upsert_replay(self, replay: Replay) -> tuple[int, bool]:
         """Return ``(replay_id, inserted)``.
