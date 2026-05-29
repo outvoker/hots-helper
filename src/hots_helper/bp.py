@@ -12,11 +12,15 @@ Two independent concerns:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import re
 
 from .db import Store
 from .stats import two_proportion_z_test, wilson_lower_bound
+
+if TYPE_CHECKING:
+    from .player_rank import PlayerRankRow
 
 
 _AI_NAME_PATTERNS = (
@@ -62,6 +66,19 @@ class OpponentProfile:
     total_games: int
     threats: list[ThreatHero] = field(default_factory=list)
     note: str = ""
+    # Composite combat-power percentile (0..100). 0.0 when we don't have
+    # a baseline yet for this handle (too few matches with the squad).
+    power: float = 0.0
+    power_rank: int = 0          # 1-indexed in the global ranking
+    power_total: int = 0         # population size of the ranking
+    # How often this handle has lined up with vs against the squad in our
+    # local DB. Both counts are zero when the player has never crossed
+    # paths with the 5-stack (e.g. the squad is undefined or the player
+    # is brand-new).
+    ally_games: int = 0
+    ally_wins: int = 0
+    enemy_games: int = 0
+    enemy_wins: int = 0
 
 
 @dataclass
@@ -201,8 +218,18 @@ def profile_opponents(
     wilson_threshold: float = 0.40,
     per_player_top: int = 5,
     mode: str = "relative",
+    rank_index: dict[str, "PlayerRankRow"] | None = None,
+    rank_total: int = 0,
+    squad_handles: tuple[str, ...] | None = None,
 ) -> list[OpponentProfile]:
-    """One profile per opponent name with their top threat heroes."""
+    """One profile per opponent name with their top threat heroes.
+
+    ``rank_index`` and ``rank_total`` come from
+    :func:`player_rank.compute_player_rankings` and let us attach a
+    combat-power percentile to each profile. ``squad_handles`` lets us
+    split shared games into ally vs enemy counts. All three are
+    optional; when omitted the extra fields stay at their zero defaults.
+    """
     out: list[OpponentProfile] = []
     for name in names:
         if _looks_like_ai(name):
@@ -249,6 +276,21 @@ def profile_opponents(
             alpha=alpha,
             wilson_threshold=wilson_threshold,
         )[:per_player_top]
+
+        power = 0.0
+        power_rank = 0
+        if rank_index is not None and best_handle:
+            ranked = rank_index.get(best_handle)
+            if ranked is not None:
+                power = ranked.power
+                power_rank = ranked.rank
+
+        ally = ally_w = enemy = enemy_w = 0
+        if squad_handles and best_handle:
+            split = store.side_split_vs_squad(best_handle, squad_handles)
+            ally, ally_w = split["ally"], split["ally_wins"]
+            enemy, enemy_w = split["enemy"], split["enemy_wins"]
+
         out.append(
             OpponentProfile(
                 name_searched=name,
@@ -257,6 +299,13 @@ def profile_opponents(
                 total_games=best_games if best_games >= 0 else 0,
                 threats=threats,
                 note="" if threats else "no signature heroes yet",
+                power=power,
+                power_rank=power_rank,
+                power_total=rank_total,
+                ally_games=ally,
+                ally_wins=ally_w,
+                enemy_games=enemy,
+                enemy_wins=enemy_w,
             )
         )
     return out

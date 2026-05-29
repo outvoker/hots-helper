@@ -894,6 +894,60 @@ class Store:
         ).fetchall()
         return {r["toon_handle"] for r in rows}
 
+    def side_split_vs_squad(
+        self,
+        toon_handle: str,
+        squad_handles: tuple[str, ...],
+        *,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+    ) -> dict[str, int]:
+        """How many shared matches landed this handle on our team vs the
+        opposite team, plus the wins on each side.
+
+        ``ally`` / ``ally_wins`` count games where the player was on the
+        squad's team (typically pugs queued with us). ``enemy`` /
+        ``enemy_wins`` count games where they queued against us. Returns
+        zeros for an empty squad list so callers can short-circuit.
+        """
+        if not squad_handles:
+            return {"ally": 0, "ally_wins": 0, "enemy": 0, "enemy_wins": 0}
+        clause, mode_params = _mode_clause(mode_filter)
+        squad_placeholders = ",".join("?" for _ in squad_handles)
+        # MIN(team) is "the team the squad sat on" — same proxy used by
+        # player_rankings_vs_squad. A 5-stack always queues onto a
+        # single team so MIN==MAX in practice.
+        row = self.conn.execute(
+            f"""
+            SELECT
+              SUM(CASE WHEN pm.team = otm.our_team THEN 1 ELSE 0 END)
+                AS ally,
+              SUM(CASE WHEN pm.team = otm.our_team AND pm.result = 1 THEN 1 ELSE 0 END)
+                AS ally_wins,
+              SUM(CASE WHEN pm.team != otm.our_team THEN 1 ELSE 0 END)
+                AS enemy,
+              SUM(CASE WHEN pm.team != otm.our_team AND pm.result = 1 THEN 1 ELSE 0 END)
+                AS enemy_wins
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            JOIN (
+                SELECT replay_id, MIN(team) AS our_team
+                FROM player_match
+                WHERE toon_handle IN ({squad_placeholders})
+                GROUP BY replay_id
+            ) otm ON otm.replay_id = pm.replay_id
+            WHERE pm.toon_handle = ?{clause}
+            """,
+            (*squad_handles, toon_handle, *mode_params),
+        ).fetchone()
+        if row is None:
+            return {"ally": 0, "ally_wins": 0, "enemy": 0, "enemy_wins": 0}
+        return {
+            "ally": int(row["ally"] or 0),
+            "ally_wins": int(row["ally_wins"] or 0),
+            "enemy": int(row["enemy"] or 0),
+            "enemy_wins": int(row["enemy_wins"] or 0),
+        }
+
     def per_match_metric_samples(
         self,
         *,

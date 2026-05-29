@@ -555,6 +555,48 @@ _translations: dict[str, dict[str, str]] = {
     "ui.popup.we_never_play": {"zh": "我方从不使用", "en": "we never play"},
     "ui.popup.we_play_n": {"zh": "我方使用 {n} 次", "en": "we play {n}x"},
 
+    # Per-player profile block at the top of the ban panel.
+    "ui.popup.ban_section_profiles": {
+        "zh": "敌方玩家速览",
+        "en": "Opponents at a glance",
+    },
+    "ui.popup.profile_power": {
+        "zh": "战斗力 {power}",
+        "en": "power {power}",
+    },
+    "ui.popup.profile_power_rank": {
+        "zh": "排名 #{rank}/{total}",
+        "en": "rank #{rank}/{total}",
+    },
+    "ui.popup.profile_no_power": {
+        "zh": "战斗力 N/A",
+        "en": "power N/A",
+    },
+    "ui.popup.profile_with_us": {
+        "zh": "和我们 {games} 局（{w}/{l} {wr}%）",
+        "en": "with us {games} ({w}/{l} {wr}%)",
+    },
+    "ui.popup.profile_vs_us": {
+        "zh": "对我们 {games} 局（{w}/{l} {wr}%）",
+        "en": "against us {games} ({w}/{l} {wr}%)",
+    },
+    "ui.popup.profile_no_history": {
+        "zh": "未与我方打过",
+        "en": "no shared games",
+    },
+    "ui.popup.profile_tag_smurf": {
+        "zh": "🔥 强力对手",
+        "en": "🔥 carry threat",
+    },
+    "ui.popup.profile_tag_troll": {
+        "zh": "💀 老坑货",
+        "en": "💀 known troll",
+    },
+    "ui.popup.profile_tag_friend": {
+        "zh": "🤝 老队友",
+        "en": "🤝 frequent ally",
+    },
+
     "ui.popup.pick_empty": {
         "zh": "<i style='color:#9a9;'>本地图暂无显著强势的英雄</i>",
         "en": "<i style='color:#9a9;'>no significantly strong picks on this map yet</i>",

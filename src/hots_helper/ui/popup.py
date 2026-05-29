@@ -483,6 +483,140 @@ class _PlayerCard(QFrame):
 # --- ban/pick lists ---------------------------------------------------------
 
 
+# Tag thresholds for the per-opponent capsule. Mirrors the BP flag cuts
+# (top / bottom 25 % of the global power ranking) but with a minimum
+# sample size so a 1-game outlier doesn't pin a 💀 on someone.
+_PROFILE_TAG_HIGH_PCT = 0.75
+_PROFILE_TAG_LOW_PCT = 0.25
+_PROFILE_TAG_MIN_GAMES = 5
+_PROFILE_TAG_FRIEND_MIN_ALLY = 3
+
+
+def _power_color(power: float) -> str:
+    """Map a 0..100 power score to a readable colour for the capsule."""
+    if power >= 75:
+        return "#ffd97a"   # gold
+    if power >= 50:
+        return "#cfd9c4"   # neutral
+    if power >= 25:
+        return "#caa"
+    return "#e08585"
+
+
+def _format_profile_line(p) -> str:
+    """One-line capsule per opponent: name · power · ally/enemy split.
+
+    Renders into the rich-text block at the top of ``_BanList`` so the
+    user can see who they're playing against without scrolling through
+    every threat hero. ``p`` is a :class:`bp.OpponentProfile`.
+    """
+    name = p.display_name or p.name_searched
+    if not p.toon_handle:
+        # AI slot or completely unseen handle — keep the line short.
+        # ``ban_player_not_in_db`` already wraps itself in a <span>.
+        return (
+            f"&nbsp;&nbsp;• <b>{name}</b> "
+            f"{t('ui.popup.ban_player_not_in_db')}"
+        )
+
+    parts: list[str] = [f"<b>{name}</b>"]
+
+    # Power chip.
+    if p.power > 0:
+        col = _power_color(p.power)
+        chip = (
+            f"<span style='color:{col};'>"
+            + t("ui.popup.profile_power", power=f"{p.power:.0f}")
+            + "</span>"
+        )
+        if p.power_total:
+            chip += (
+                f" <span style='color:#888;'>"
+                + t("ui.popup.profile_power_rank",
+                    rank=p.power_rank, total=p.power_total)
+                + "</span>"
+            )
+        parts.append(chip)
+    else:
+        parts.append(
+            f"<span style='color:#888;'>{t('ui.popup.profile_no_power')}</span>"
+        )
+
+    # Side split. Show whichever sides actually have games; if both are
+    # zero (handle is in the DB but never crossed our squad), say so.
+    side_chunks: list[str] = []
+    if p.ally_games:
+        wr = (p.ally_wins / p.ally_games) * 100 if p.ally_games else 0.0
+        losses = p.ally_games - p.ally_wins
+        side_chunks.append(
+            f"<span style='color:#8cf;'>"
+            + t(
+                "ui.popup.profile_with_us",
+                games=p.ally_games,
+                w=p.ally_wins,
+                l=losses,
+                wr=f"{wr:.0f}",
+            )
+            + "</span>"
+        )
+    if p.enemy_games:
+        wr = (p.enemy_wins / p.enemy_games) * 100 if p.enemy_games else 0.0
+        losses = p.enemy_games - p.enemy_wins
+        side_chunks.append(
+            f"<span style='color:#f88;'>"
+            + t(
+                "ui.popup.profile_vs_us",
+                games=p.enemy_games,
+                w=p.enemy_wins,
+                l=losses,
+                wr=f"{wr:.0f}",
+            )
+            + "</span>"
+        )
+    if side_chunks:
+        parts.append(" · ".join(side_chunks))
+    else:
+        parts.append(
+            f"<span style='color:#888;'>{t('ui.popup.profile_no_history')}</span>"
+        )
+
+    # Tags: only when the ranking has enough population to be meaningful
+    # AND this player has crossed our path enough times to trust the
+    # signal. Multiple tags can stack (rare but possible — e.g. a strong
+    # opponent who was once a teammate).
+    tags: list[str] = []
+    has_rank_pop = p.power_total and p.power_rank
+    if has_rank_pop:
+        high_cut = max(1, int(p.power_total * (1.0 - _PROFILE_TAG_HIGH_PCT)))
+        low_cut = max(1, int(p.power_total * (1.0 - _PROFILE_TAG_LOW_PCT)))
+        shared_games = p.ally_games + p.enemy_games
+        if (
+            p.power_rank <= high_cut
+            and shared_games >= _PROFILE_TAG_MIN_GAMES
+        ):
+            tags.append(
+                f"<span style='color:#ffd97a; font-weight: bold;'>"
+                f"{t('ui.popup.profile_tag_smurf')}</span>"
+            )
+        elif (
+            p.power_rank > low_cut
+            and shared_games >= _PROFILE_TAG_MIN_GAMES
+        ):
+            tags.append(
+                f"<span style='color:#e08585; font-weight: bold;'>"
+                f"{t('ui.popup.profile_tag_troll')}</span>"
+            )
+    if p.ally_games >= _PROFILE_TAG_FRIEND_MIN_ALLY and p.ally_games > p.enemy_games:
+        tags.append(
+            f"<span style='color:#8cf;'>"
+            f"{t('ui.popup.profile_tag_friend')}</span>"
+        )
+    if tags:
+        parts.append(" ".join(tags))
+
+    return "&nbsp;&nbsp;• " + "  ·  ".join(parts)
+
+
 class _BanList(QFrame):
     def __init__(self) -> None:
         super().__init__()
@@ -529,6 +663,19 @@ class _BanList(QFrame):
     ) -> None:
         self._last_args = (cands, profiles, map_tier)
         head_lines: list[str] = []
+
+        # Top section: per-opponent capsule (power score + side history).
+        # Skip when the caller didn't pass profiles at all (legacy callers
+        # that only render bans), but render it even if no threats exist
+        # — it's the most useful "at a glance" block.
+        if profiles:
+            head_lines.append(
+                f"<u style='color:#fbb;'>{t('ui.popup.ban_section_profiles')}</u>"
+            )
+            for p in profiles:
+                head_lines.append(_format_profile_line(p))
+            head_lines.append("")
+
         head_lines.append(f"<u style='color:#fbb;'>{t('ui.popup.ban_section_history')}</u>")
         if cands:
             for c in cands:
@@ -1257,10 +1404,24 @@ class PopupWindow(QWidget):
         enemy_names = [c.name for c in self._enemy_cards if c.name]
         map_name = self.map_edit.currentText().strip() or None
 
+        # The ranking index is normally populated by ``_run_analysis`` once
+        # per pass; ``_refresh_bans`` may be called from a single-card
+        # correction before that has happened, so guard against missing
+        # state.
+        rank_index = getattr(self, "_ranked_by_handle", {}) or {}
+        rank_total = getattr(self, "_ranked_total", 0) or 0
+        squad_tuple = self._squad_handles_tuple()
+
         if enemy_names:
             from ..bp import profile_opponents
             bans = recommend_bans(self.store, enemy_names)
-            profiles = profile_opponents(self.store, enemy_names)
+            profiles = profile_opponents(
+                self.store,
+                enemy_names,
+                rank_index=rank_index,
+                rank_total=rank_total,
+                squad_handles=squad_tuple,
+            )
         else:
             bans = []
             profiles = []
@@ -1276,6 +1437,24 @@ class PopupWindow(QWidget):
         self.ban_panel.set_candidates(bans, profiles=profiles, map_tier=map_tier)
         self._last_bans = list(bans)
         self._last_map_tier = list(map_tier)
+
+    def _squad_handles_tuple(self) -> tuple[str, ...]:
+        """Squad handles from the DB, cached per popup instance.
+
+        Used both by the side-split lookup in ban profiles and by any
+        future BP query that needs "us vs them" framing. Cached
+        because :meth:`Store.squad_handles` scans the whole player_match
+        table and we'd otherwise re-run it on every BP refresh.
+        """
+        cached = getattr(self, "_squad_tuple_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            squad = tuple(self.store.squad_handles())
+        except Exception:
+            squad = ()
+        self._squad_tuple_cache = squad
+        return squad
 
     def _resolve_squad_handles(self, ally_names: list[str]) -> list[str]:
         """Map ally display names to toon_handle for the map-tier ban query."""
@@ -1295,6 +1474,10 @@ class PopupWindow(QWidget):
         # consecutive hotkey presses isn't reflected in the per-player
         # cards or BP recommendations until the app is restarted.
         self.store.drop_read_snapshot()
+        # Squad-handles cache is also keyed on a fresh DB read — wipe
+        # it here so a recently-ingested replay can promote a new
+        # handle into the squad set on the next BP pass.
+        self._squad_tuple_cache = None
         # Refresh the leaderboards once per analysis pass so the
         # highlight on each player card reflects the current DB state.
         # Top 30 of each board is a comfortable cutoff: anything below
@@ -1307,10 +1490,19 @@ class PopupWindow(QWidget):
 
         # Ban list from enemy names only.
         enemies_filled = [n for n in enemy_names if n]
+        rank_index = getattr(self, "_ranked_by_handle", {}) or {}
+        rank_total = getattr(self, "_ranked_total", 0) or 0
+        squad_tuple = self._squad_handles_tuple()
         if enemies_filled:
             from ..bp import profile_opponents
             bans = recommend_bans(self.store, enemies_filled)
-            profiles = profile_opponents(self.store, enemies_filled)
+            profiles = profile_opponents(
+                self.store,
+                enemies_filled,
+                rank_index=rank_index,
+                rank_total=rank_total,
+                squad_handles=squad_tuple,
+            )
         else:
             bans = []
             profiles = []
