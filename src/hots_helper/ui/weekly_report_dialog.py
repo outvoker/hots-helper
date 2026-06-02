@@ -75,9 +75,23 @@ def _fmt_date(iso: str) -> str:
     return iso[5:10] if iso and len(iso) >= 10 else (iso or "")
 
 
+# Mirror weekly_report._TIME_AWARDS / _COUNT_AWARDS so the dialog renders
+# award metrics in the same units as the clipboard digest.
+_TIME_AWARDS = frozenset({"cc", "stun", "on_fire", "actor"})
+_COUNT_AWARDS = frozenset({
+    "teamfight", "solo_kill", "mercs", "towers", "clutch",
+    "protect", "escapes", "loner",
+})
+
+
 def _award_value(label_key: str, value: float) -> str:
-    if label_key.endswith("god_kda"):
+    suffix = label_key.rsplit(".", 1)[-1]
+    if suffix == "god_kda":
         return f"{value:.2f}"
+    if suffix in _TIME_AWARDS:
+        return f"{value:.0f}s"
+    if suffix in _COUNT_AWARDS:
+        return f"{value:.1f}"
     return _fmt_k(value)
 
 

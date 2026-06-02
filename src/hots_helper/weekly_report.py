@@ -13,12 +13,20 @@ distribution.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .db import Store
+from .hero_roles import FRONTLINE_ROLES, HEAL_ROLES, hero_role
 from .i18n import t
+
+# Role groups the awards scope to. Healing awards → healer+support;
+# frontline (tank/soak) → tank+bruiser; damage awards → assassin+bruiser.
+_HEAL_ROLES = HEAL_ROLES
+_FRONTLINE_ROLES = FRONTLINE_ROLES
+_DAMAGE_ROLES: frozenset[str] = frozenset({"assassin", "bruiser"})
 
 # We treat values above this as uint32 sentinel garbage from older replay
 # parsers — same threshold the leaderboards use to drop overflow rows.
@@ -35,6 +43,12 @@ _TAKEN_THRESHOLD = 30000
 # report for.
 _MIN_GAMES_HERO_TOP_WR = 3
 _MIN_GAMES_PLAYER_HERO_PICK = 1
+
+# Cap how many awards a single squad member can hold. Without this, the
+# squad's highest-volume player (e.g. someone with 38 Azmodan games) sweeps
+# every cumulative-stat award. Once a player hits the cap, that award rolls
+# down to the next-best contestant so the trophies spread across the squad.
+_MAX_AWARDS_PER_PLAYER = 3
 
 
 # --- dataclasses -------------------------------------------------------------
@@ -192,10 +206,21 @@ def _fetch_squad_matches(
         SELECT pm.toon_handle, pm.display_name AS pm_display_name,
                pm.hero, pm.hero_id, pm.team, pm.result,
                pm.kills, pm.deaths, pm.assists,
+               pm.takedowns, pm.solo_kills,
                pm.hero_damage, pm.siege_damage, pm.structure_damage,
                pm.healing, pm.damage_taken, pm.damage_soaked,
                pm.experience_contribution AS xp,
                pm.time_cc_enemy_heroes    AS cc,
+               pm.time_stunning_enemy_heroes AS stun,
+               pm.on_fire_time            AS on_fire,
+               pm.time_spent_dead         AS dead,
+               pm.outnumbered_deaths      AS outnumbered,
+               pm.merc_camp_captures      AS mercs,
+               pm.watch_tower_captures    AS towers,
+               pm.teamfight_hero_damage   AS tf_dmg,
+               pm.clutch_heals            AS clutch,
+               pm.protection_given_to_allies AS protection,
+               pm.escapes_performed       AS escapes,
                r.id AS replay_id, r.played_at, r.map_name, r.duration_s
         FROM player_match pm
         JOIN replays r ON r.id = pm.replay_id
@@ -299,55 +324,85 @@ def _compute_players(rows: list[Any], display_names: dict[str, str]) -> list[Pla
 
 def _award_score(
     rows: list[Any], handle: str, *,
-    field_name: str, threshold: int = 0,
+    field_name: str,
+    roles: frozenset[str] | None = None,
+    threshold: int = 0,
 ) -> tuple[float, int, str]:
-    """Average of ``field_name`` for ``handle`` plus the player's
-    most-played hero **within the qualifying games**.
+    """Average of ``field_name`` for ``handle`` over the games that
+    *count* for this award, plus the hero that contributed the most.
 
-    ``threshold > 0`` gates role awards (healer/tank) so a tank's
-    solo-tank stat isn't diluted by their non-tank games — and the
-    representative hero is picked from those same qualifying games,
-    so 主治疗 doesn't end up labelled with a tank hero.
+    Scoping (so a flex player isn't penalised for mixing roles):
+
+    * ``roles`` — only games whose hero belongs to one of these roles
+      count. This is the precise gate: 治疗最高 scopes to healer/support
+      so a DPS player's near-zero healing games are excluded entirely,
+      and a healer who also plays DPS contends on their healer games
+      alone. When a hero's role is unknown (not in the role map) the
+      game still counts **iff** it clears ``threshold`` — so an
+      unmapped hero is never silently dropped.
+    * ``threshold`` — fallback numeric gate, used for unmapped heroes
+      and for un-scoped awards that still want to drop trivial values.
+
+    The representative hero is the one with the **highest cumulative
+    value** (ties broken by games), not the most-played — otherwise an
+    award could be labelled with a hero who barely earned it (e.g. a
+    high-pick-rate 阿兹莫丹 fronting the control award when the control
+    actually came from a few 雷加尔 games).
 
     Returns ``(avg, games_counted, hero)``.
     """
     total = 0
     n = 0
-    by_hero: dict[str, int] = {}
+    by_hero: dict[str, list[int]] = {}  # hero -> [total_value, games]
     for r in rows:
         if r["toon_handle"] != handle:
             continue
+        hero = r["hero"] or "?"
         v = _sanitised(r[field_name])
-        if threshold > 0 and v <= threshold:
+        if roles is not None:
+            role = hero_role(hero)
+            if role is not None:
+                if role not in roles:
+                    continue
+            elif v <= threshold:  # unknown role → numeric fallback gate
+                continue
+        elif threshold > 0 and v <= threshold:
             continue
         total += v
         n += 1
-        hero = r["hero"] or "?"
-        by_hero[hero] = by_hero.get(hero, 0) + 1
+        slot = by_hero.setdefault(hero, [0, 0])
+        slot[0] += v
+        slot[1] += 1
     if n == 0:
         return 0.0, 0, ""
-    hero = max(by_hero.items(), key=lambda kv: kv[1])[0]
+    hero = max(by_hero.items(), key=lambda kv: (kv[1][0], kv[1][1]))[0]
     return total / n, n, hero
 
 
 def _award_score_kda(rows: list[Any], handle: str) -> tuple[float, int, str]:
-    """KDA over all of ``handle``'s games, plus their most-played hero."""
+    """KDA over all of ``handle``'s games, plus their best-KDA-contributing
+    hero (most K+A, ties broken by games) — consistent with the other
+    awards showing the hero that earned the trophy."""
     k = d = a = 0
     n = 0
-    by_hero: dict[str, int] = {}
+    by_hero: dict[str, list[int]] = {}  # hero -> [k+a, games]
     for r in rows:
         if r["toon_handle"] != handle:
             continue
-        k += int(r["kills"] or 0)
+        kk = int(r["kills"] or 0)
+        aa = int(r["assists"] or 0)
+        k += kk
         d += int(r["deaths"] or 0)
-        a += int(r["assists"] or 0)
+        a += aa
         n += 1
         hero = r["hero"] or "?"
-        by_hero[hero] = by_hero.get(hero, 0) + 1
+        slot = by_hero.setdefault(hero, [0, 0])
+        slot[0] += kk + aa
+        slot[1] += 1
     if n == 0:
         return 0.0, 0, ""
     kda = (k + a) / max(d, 1)  # avoid div0; same convention as the rest of the app
-    hero = max(by_hero.items(), key=lambda kv: kv[1])[0]
+    hero = max(by_hero.items(), key=lambda kv: (kv[1][0], kv[1][1]))[0]
     return kda, n, hero
 
 
@@ -356,27 +411,81 @@ def _compute_awards(
     display_names: dict[str, str],
     handles: list[str],
 ) -> list[MvpAward]:
-    """One winner per award. Skipped silently when nobody qualifies (e.g.
-    a 7-day window with zero healing games → no 主治疗 award)."""
-    awards: list[MvpAward] = []
+    """One winner per award, spread across the squad.
 
-    def _winner(label: str, scoring) -> None:
-        """``scoring(handle) -> (value, games, hero)``. Top value wins;
-        ties broken by more games (more reliable signal). Contestants
-        with games=0 are dropped. The representative hero comes from
-        the scoring function so role awards (healer/tank) display a
-        hero from the *qualifying* games, not the player's most-played
-        hero across the whole window."""
+    Each award is ranked independently, then a subset is chosen for
+    display so no single player holds more than ``_MAX_AWARDS_PER_PLAYER``
+    (see :func:`_select_awards`) — always keeping each award's genuine
+    #1, never demoting to a runner-up. Awards where nobody qualifies
+    (e.g. a window with zero healer games → no 治疗最高) are dropped
+    before selection. The award **order below is the display order**.
+
+    Role scoping: many awards only make sense for certain hero roles, so
+    they pass ``roles=`` and :func:`_award_score` counts only the games
+    on a hero of that role (see its docstring). This means a flex player
+    contends for 治疗最高 on their healer games alone, not diluted by
+    their DPS games — and a DPS player's incidental healing never wins.
+    Combat/objective awards every role contributes to stay un-scoped.
+    """
+    HEAL = _HEAL_ROLES        # healer + support
+    FRONT = _FRONTLINE_ROLES  # tank + bruiser
+    DMG = _DAMAGE_ROLES       # assassin + bruiser
+
+    # (label, scoring) in display order. scoring(handle) -> (value, games, hero).
+    specs: list[tuple[str, Any]] = [
+        # --- combat: every role contributes, no role scope --------------
+        ("ui.weekly.award.god_kda", lambda h: _award_score_kda(rows, h)),
+        ("ui.weekly.award.teamfight", lambda h: _award_score(rows, h, field_name="takedowns")),
+        # --- damage dealing: assassins & bruisers -----------------------
+        ("ui.weekly.award.dmg_king", lambda h: _award_score(rows, h, field_name="hero_damage", roles=DMG)),
+        ("ui.weekly.award.tf_dmg", lambda h: _award_score(rows, h, field_name="tf_dmg", roles=DMG)),
+        ("ui.weekly.award.solo_kill", lambda h: _award_score(rows, h, field_name="solo_kills", roles=DMG)),
+        ("ui.weekly.award.on_fire", lambda h: _award_score(rows, h, field_name="on_fire", roles=DMG)),
+        # --- healing: healers & supports --------------------------------
+        ("ui.weekly.award.healer", lambda h: _award_score(
+            rows, h, field_name="healing", roles=HEAL, threshold=_HEAL_THRESHOLD)),
+        ("ui.weekly.award.clutch", lambda h: _award_score(rows, h, field_name="clutch", roles=HEAL)),
+        # --- frontline: tanks & bruisers --------------------------------
+        ("ui.weekly.award.tank", lambda h: _award_score(
+            rows, h, field_name="damage_taken", roles=FRONT, threshold=_TAKEN_THRESHOLD)),
+        ("ui.weekly.award.soak", lambda h: _award_score(rows, h, field_name="damage_soaked", roles=FRONT)),
+        # --- control / protection: frontline + support -----------------
+        ("ui.weekly.award.cc", lambda h: _award_score(rows, h, field_name="cc", roles=FRONT | HEAL)),
+        ("ui.weekly.award.stun", lambda h: _award_score(rows, h, field_name="stun", roles=FRONT | HEAL)),
+        ("ui.weekly.award.protect", lambda h: _award_score(rows, h, field_name="protection", roles=FRONT | HEAL)),
+        # --- objective / map: every role, no scope ----------------------
+        ("ui.weekly.award.siege", lambda h: _award_score(rows, h, field_name="structure_damage")),
+        ("ui.weekly.award.xp", lambda h: _award_score(rows, h, field_name="xp")),
+        ("ui.weekly.award.mercs", lambda h: _award_score(rows, h, field_name="mercs")),
+        ("ui.weekly.award.towers", lambda h: _award_score(rows, h, field_name="towers")),
+        ("ui.weekly.award.escapes", lambda h: _award_score(rows, h, field_name="escapes")),
+        # --- tongue-in-cheek --------------------------------------------
+        ("ui.weekly.award.actor", lambda h: _award_score(rows, h, field_name="dead")),
+        ("ui.weekly.award.loner", lambda h: _award_score(rows, h, field_name="outnumbered")),
+    ]
+
+    # Rank every award's contestants (drop games=0). ranked[label] is a
+    # descending list of (value, games, handle, hero).
+    ranked: dict[str, list[tuple[float, int, str, str]]] = {}
+    for label, scoring in specs:
         contestants: list[tuple[float, int, str, str]] = []
         for h in handles:
             v, n, hero = scoring(h)
             if n <= 0:
                 continue
             contestants.append((v, n, h, hero))
-        if not contestants:
-            return
-        contestants.sort(key=lambda t: (-t[0], -t[1]))
-        v, n, h, hero = contestants[0]
+        if contestants:
+            contestants.sort(key=lambda t: (-t[0], -t[1]))
+            ranked[label] = contestants
+
+    shown = _select_awards([label for label, _ in specs], ranked)
+
+    awards: list[MvpAward] = []
+    for label in (label for label, _ in specs):  # preserve display order
+        won = shown.get(label)
+        if won is None:
+            continue
+        v, n, h, hero = won
         awards.append(
             MvpAward(
                 label_key=label,
@@ -386,24 +495,53 @@ def _compute_awards(
                 games=n,
             )
         )
-
-    _winner("ui.weekly.award.god_kda",
-            lambda h: _award_score_kda(rows, h))
-    _winner("ui.weekly.award.dmg_king",
-            lambda h: _award_score(rows, h, field_name="hero_damage"))
-    _winner("ui.weekly.award.healer",
-            lambda h: _award_score(
-                rows, h, field_name="healing", threshold=_HEAL_THRESHOLD,
-            ))
-    _winner("ui.weekly.award.tank",
-            lambda h: _award_score(
-                rows, h, field_name="damage_taken", threshold=_TAKEN_THRESHOLD,
-            ))
-    _winner("ui.weekly.award.siege",
-            lambda h: _award_score(rows, h, field_name="structure_damage"))
-    _winner("ui.weekly.award.xp",
-            lambda h: _award_score(rows, h, field_name="xp"))
     return awards
+
+
+def _award_dominance(ranked_award: list[tuple[float, int, str, str]]) -> float:
+    """How decisively the #1 contestant leads — winner_value / next
+    *different* contestant's value (``inf`` when they're the only one).
+    Used to decide which of an over-represented player's awards are the
+    most iconic and worth keeping."""
+    if not ranked_award:
+        return 0.0
+    top_val, _, top_handle, _ = ranked_award[0]
+    for val, _n, handle, _hero in ranked_award[1:]:
+        if handle != top_handle:
+            return top_val / val if val > 0 else float("inf")
+    return float("inf")  # sole contestant
+
+
+def _select_awards(
+    order: list[str],
+    ranked: dict[str, list[tuple[float, int, str, str]]],
+) -> dict[str, tuple[float, int, str, str]]:
+    """Choose *which* awards to display so trophies spread across the
+    squad — without ever lying about a winner.
+
+    Every shown award keeps its genuine #1 (``ranked[label][0]``); we
+    never demote to a runner-up. The squad's highest-volume player tends
+    to top many cumulative-stat awards, so to avoid them sweeping the
+    board we cap each player at ``_MAX_AWARDS_PER_PLAYER`` and, for
+    anyone over the cap, keep the awards they lead **most decisively**
+    (largest margin over the runner-up) and simply omit the rest. An
+    omitted award means that metric goes untrophied this week — better
+    than handing "Damage king" to the second-best damage dealer.
+    """
+    # True winner of each award (rank 0).
+    winners = {label: ranked[label][0] for label in order if label in ranked}
+
+    by_player: dict[str, list[str]] = defaultdict(list)
+    for label, (_v, _n, handle, _hero) in winners.items():
+        by_player[handle].append(label)
+
+    keep: set[str] = set()
+    for _handle, labels in by_player.items():
+        # Most decisive leads first; keep the top N, drop the rest.
+        labels.sort(key=lambda lb: _award_dominance(ranked[lb]), reverse=True)
+        keep.update(labels[:_MAX_AWARDS_PER_PLAYER])
+
+    return {label: winners[label] for label in order if label in keep}
 
 
 def _compute_highlights(
@@ -611,11 +749,31 @@ def _fmt_date(iso: str) -> str:
     return iso[5:10] if len(iso) >= 10 else iso
 
 
+# Awards whose metric is a per-game average of seconds (control / stun /
+# on-fire / dead time) — rendered as "78s" rather than a compact 'k' string.
+_TIME_AWARDS = frozenset({"cc", "stun", "on_fire", "actor"})
+# Awards whose metric is a small per-game count (takedowns / solo kills /
+# mercs / towers / clutch heals / protection events / escapes / outnumbered
+# deaths) — rendered with one decimal, e.g. "12.4".
+_COUNT_AWARDS = frozenset({
+    "teamfight", "solo_kill", "mercs", "towers", "clutch",
+    "protect", "escapes", "loner",
+})
+
+
 def _award_value_str(label_key: str, value: float) -> str:
     """Format the award metric in the unit the user expects.
-    KDA/XP get a number; everything else gets a compact 'k' string."""
-    if label_key.endswith("god_kda"):
+
+    KDA gets a 2-dp number; time awards get a seconds suffix; small-count
+    awards get a 1-dp number; everything else gets a compact 'k' string.
+    """
+    suffix = label_key.rsplit(".", 1)[-1]
+    if suffix == "god_kda":
         return f"{value:.2f}"
+    if suffix in _TIME_AWARDS:
+        return f"{value:.0f}s"
+    if suffix in _COUNT_AWARDS:
+        return f"{value:.1f}"
     return _fmt_k(value)
 
 
