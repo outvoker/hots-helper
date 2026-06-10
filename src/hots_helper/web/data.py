@@ -174,16 +174,23 @@ def provider_from_env() -> StoreProvider:
 
     * ``HOTS_DB_PATH`` — open this SQLite directly, skip cloud sync.
     * ``SUPABASE_URL`` / ``SUPABASE_ANON_KEY`` — pull from Supabase.
+      When unset, fall back to the squad's built-in defaults in
+      :mod:`hots_helper.sync_defaults` (the ``sb_publishable_…`` anon key
+      is safe to ship in source), so a deployment works out of the box
+      and only needs ``HOTS_ACCESS_PASSWORD`` configured. Set the env
+      vars to point a private deployment at a different project.
     * ``HOTS_REFRESH_SECONDS`` — refresh interval (default 600).
     """
+    from ..sync_defaults import DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL
+
     refresh = os.environ.get("HOTS_REFRESH_SECONDS")
     try:
         refresh_seconds = int(refresh) if refresh else _DEFAULT_REFRESH_SECONDS
     except ValueError:
         refresh_seconds = _DEFAULT_REFRESH_SECONDS
     return StoreProvider(
-        supabase_url=os.environ.get("SUPABASE_URL", ""),
-        supabase_key=os.environ.get("SUPABASE_ANON_KEY", ""),
+        supabase_url=os.environ.get("SUPABASE_URL") or DEFAULT_SUPABASE_URL,
+        supabase_key=os.environ.get("SUPABASE_ANON_KEY") or DEFAULT_SUPABASE_ANON_KEY,
         db_path=os.environ.get("HOTS_DB_PATH") or None,
         refresh_seconds=refresh_seconds,
     )

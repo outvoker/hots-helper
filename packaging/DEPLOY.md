@@ -20,16 +20,19 @@ React 单页前端，数据从战队的 Supabase 项目实时同步。本服务*
 
 ## 环境变量
 
+默认情况下，连哪个 Supabase 项目是**写死在源码里的**
+（`src/hots_helper/sync_defaults.py`，用的是可安全公开的 `sb_publishable_…`
+anon key，与桌面端共用同一个战队项目）。所以正常部署**只需要设一个
+`HOTS_ACCESS_PASSWORD`**，Supabase 两个变量留空即可。
+
 | 变量 | 必需 | 说明 |
 |------|------|------|
-| `SUPABASE_URL` | 是* | Supabase 项目 URL |
-| `SUPABASE_ANON_KEY` | 是* | Supabase anon public key |
 | `HOTS_ACCESS_PASSWORD` | 建议 | 全站访问口令（HTTP Basic，用户名任意）。不设则公开访问 |
+| `SUPABASE_URL` | 否 | 覆盖内置的 Supabase 项目 URL（私有部署才需要） |
+| `SUPABASE_ANON_KEY` | 否 | 覆盖内置的 anon key |
 | `HOTS_REFRESH_SECONDS` | 否 | 云端刷新间隔，默认 600 |
-| `HOTS_DB_PATH` | 否 | 直接打开某个本地 SQLite 快照，跳过云同步（与 Supabase 二选一） |
+| `HOTS_DB_PATH` | 否 | 直接打开某个本地 SQLite 快照，跳过云同步 |
 | `HOTS_WEB_PORT` / `PORT` | 否 | 监听端口，默认 7860 |
-
-\* 不设 Supabase 也能启动，只是没有数据（接口返回空、前端显示「暂无数据」）。
 
 ## 方案一：Render（免费，推荐）
 
@@ -41,15 +44,13 @@ React 单页前端，数据从战队的 Supabase 项目实时同步。本服务*
 
 1. https://render.com 用 GitHub 登录。
 2. **New → Blueprint**，选本仓库 → Render 读取 `render.yaml` 自动建好服务。
-3. 首次部署会提示填环境变量（`render.yaml` 里标了 `sync: false` 的三个）：
-   - `SUPABASE_URL`
-   - `SUPABASE_ANON_KEY`
-   - `HOTS_ACCESS_PASSWORD`
+3. 首次部署只会提示填一个 `HOTS_ACCESS_PASSWORD`（你自定的访问口令）。
+   Supabase 用的是源码里内置的战队项目，无需填。
 4. 等构建完成，打开 `https://<服务名>.onrender.com`，输入口令即可。
 
 不想用 Blueprint 也可以手动：**New → Web Service → 选 Docker → 关联仓库**，
-然后在 **Environment** 里填上面三个变量。Render 会注入 `PORT`，`hots-web`
-已兼容；端口/启动命令都不用手动设。
+在 **Environment** 里填 `HOTS_ACCESS_PASSWORD`。Render 会注入 `PORT`，
+`hots-web` 已兼容；端口/启动命令都不用手动设。
 
 > 容器文件系统是临时的，watermark 每次重新部署/休眠唤醒会重置 → 冷启动
 > 重新全量拉云端数据（小队库很小，秒级，可接受）。

@@ -3,8 +3,13 @@
 # runtime) and injects $PORT, which hots-web already honours.
 #
 # Deploy: render.com → New → Blueprint → pick this repo. Render will
-# prompt for the three secrets below (sync: false = "ask me, don't store
-# in the repo").
+# prompt only for HOTS_ACCESS_PASSWORD (sync: false = "ask me, don't
+# store in the repo").
+#
+# The Supabase project is baked into the source (sync_defaults.py, a
+# publishable anon key), so SUPABASE_URL / SUPABASE_ANON_KEY are NOT
+# required — set them only to point a private deployment at a different
+# project.
 services:
   - type: web
     name: hots-helper
@@ -13,10 +18,6 @@ services:
     plan: free
     healthCheckPath: /api/health
     envVars:
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_ANON_KEY
-        sync: false
       - key: HOTS_ACCESS_PASSWORD
         sync: false
       - key: HOTS_REFRESH_SECONDS
