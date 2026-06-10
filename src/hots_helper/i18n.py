@@ -849,6 +849,11 @@ _translations: dict[str, dict[str, str]] = {
         "zh": "{hero} {wins}/{games} ({wr})",
         "en": "{hero} {wins}/{games} ({wr})",
     },
+    "ui.weekly.section.combos": {"zh": "🤝 英雄组合胜率（历史）", "en": "🤝 Best hero combos (all-time)"},
+    "ui.weekly.combo_line": {
+        "zh": "{hero_a} + {hero_b}：{wins}/{games}（胜率 {wr}）",
+        "en": "{hero_a} + {hero_b}: {wins}/{games} ({wr})",
+    },
     "ui.weekly.section.maps": {"zh": "🗺️ 地图表现", "en": "🗺️ Map breakdown"},
     "ui.weekly.map_line": {
         "zh": "{map}：{wins}/{games}（胜率 {wr}）",

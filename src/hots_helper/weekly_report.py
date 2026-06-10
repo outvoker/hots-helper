@@ -44,6 +44,14 @@ _TAKEN_THRESHOLD = 30000
 _MIN_GAMES_HERO_TOP_WR = 3
 _MIN_GAMES_PLAYER_HERO_PICK = 1
 
+# A hero pairing is rarer than a single-hero pick (it needs two squad
+# members on specific heroes in the *same* game). Combos are computed over
+# all history, so we can ask for a real sample before trusting a winrate —
+# a 1-2 game pairing's 100% is noise, not a synergy worth reporting.
+_MIN_GAMES_HERO_COMBO = 4
+# How many top combos to surface.
+_MAX_HERO_COMBOS = 5
+
 # Cap how many awards a single squad member can hold. Without this, the
 # squad's highest-volume player (e.g. someone with 38 Azmodan games) sweeps
 # every cumulative-stat award. Once a player hits the cap, that award rolls
@@ -113,6 +121,21 @@ class HeroPickStat:
 
 
 @dataclass
+class HeroComboStat:
+    """Win record for a pair of heroes the squad fielded *together* in the
+    same game. ``hero_a`` / ``hero_b`` are stored sorted so the same
+    pairing always keys identically regardless of pick order."""
+    hero_a: str
+    hero_b: str
+    games: int
+    wins: int
+
+    @property
+    def winrate(self) -> float:
+        return (self.wins / self.games) if self.games else 0.0
+
+
+@dataclass
 class MapStat:
     map_name: str
     games: int
@@ -167,6 +190,7 @@ class WeeklyReport:
     highlights: list[HighlightMatch] = field(default_factory=list)
     hero_top_picked: list[HeroPickStat] = field(default_factory=list)
     hero_top_winrate: list[HeroPickStat] = field(default_factory=list)
+    hero_combos: list[HeroComboStat] = field(default_factory=list)
     maps: list[MapStat] = field(default_factory=list)
     longest_win_streak: StreakRun = field(default_factory=lambda: StreakRun(0, "", ""))
     longest_loss_streak: StreakRun = field(default_factory=lambda: StreakRun(0, "", ""))
@@ -233,6 +257,27 @@ def _fetch_squad_matches(
     return store.conn.execute(
         sql, (*squad, start_iso, end_iso)
     ).fetchall()
+
+
+def _fetch_squad_combo_rows(store: Store, squad: tuple[str, ...]) -> list[Any]:
+    """All-time Storm League (replay_id, hero, result) rows for the squad.
+
+    Hero combos are computed over the *entire history*, not the rolling
+    window, so a pairing's winrate reflects every game the squad has ever
+    fielded it. Only the three columns the pairing math needs are
+    selected — no window bound.
+    """
+    if not squad:
+        return []
+    placeholders = ",".join("?" for _ in squad)
+    sql = f"""
+        SELECT pm.hero, pm.result, r.id AS replay_id
+        FROM player_match pm
+        JOIN replays r ON r.id = pm.replay_id
+        WHERE pm.toon_handle IN ({placeholders})
+          AND r.mode = 'Storm League'
+    """
+    return store.conn.execute(sql, squad).fetchall()
 
 
 def _display_name_lookup(store: Store, handles: tuple[str, ...]) -> dict[str, str]:
@@ -596,6 +641,55 @@ def _compute_hero_pool(rows: list[Any]) -> tuple[list[HeroPickStat], list[HeroPi
     return top_picked, top_wr
 
 
+def _compute_hero_combos(rows: list[Any]) -> list[HeroComboStat]:
+    """Top squad hero *pairings* by winrate, computed over all history.
+
+    Unlike the rest of the report, this is not scoped to the rolling
+    window — ``rows`` is the squad's entire Storm League history so a
+    combo's winrate reflects every game it was ever fielded.
+
+    For each replay we collect the distinct squad heroes that played it,
+    then count every unordered pair. A combo's record is "games the squad
+    fielded both heroes together" → "of those, how many were won". Pairs
+    are keyed on the sorted (hero_a, hero_b) tuple so pick order never
+    splits a combo into two rows.
+
+    Only pairings with at least ``_MIN_GAMES_HERO_COMBO`` games qualify —
+    a combo needs to recur before its winrate means anything. Sorted by
+    winrate desc, then games desc as the tiebreak so a 3-0 combo outranks
+    a 2-0 one.
+    """
+    # replay_id -> {hero: result}. Same hero can't appear twice per team in
+    # HotS, so a set of heroes per replay is exact.
+    by_replay: dict[int, tuple[set[str], int]] = {}
+    for r in rows:
+        rid = int(r["replay_id"])
+        hero = r["hero"] or "?"
+        if hero == "?":
+            continue
+        heroes, _result = by_replay.setdefault(rid, (set(), int(r["result"])))
+        heroes.add(hero)
+
+    by_pair: dict[tuple[str, str], dict[str, int]] = {}
+    for heroes, result in by_replay.values():
+        ordered = sorted(heroes)
+        for i in range(len(ordered)):
+            for j in range(i + 1, len(ordered)):
+                key = (ordered[i], ordered[j])
+                d = by_pair.setdefault(key, {"games": 0, "wins": 0})
+                d["games"] += 1
+                if result == 1:
+                    d["wins"] += 1
+
+    qualifying = [
+        HeroComboStat(hero_a=a, hero_b=b, games=d["games"], wins=d["wins"])
+        for (a, b), d in by_pair.items()
+        if d["games"] >= _MIN_GAMES_HERO_COMBO
+    ]
+    qualifying.sort(key=lambda c: (-c.winrate, -c.games))
+    return qualifying[:_MAX_HERO_COMBOS]
+
+
 def _compute_maps(rows: list[Any]) -> list[MapStat]:
     """One row per map. Dedup across squad members on the same replay."""
     by_replay: dict[int, tuple[str, int]] = {}
@@ -703,6 +797,8 @@ def build_weekly_report(
     awards = _compute_awards(cur_rows, display_names, list(squad))
     highlights = _compute_highlights(cur_rows, display_names)
     top_picked, top_wr = _compute_hero_pool(cur_rows)
+    # Hero combos span the squad's full history, not the rolling window.
+    hero_combos = _compute_hero_combos(_fetch_squad_combo_rows(store, squad))
     maps = _compute_maps(cur_rows)
     win_streak, loss_streak = _compute_streaks(cur_rows)
 
@@ -713,6 +809,7 @@ def build_weekly_report(
         highlights=highlights,
         hero_top_picked=top_picked,
         hero_top_winrate=top_wr,
+        hero_combos=hero_combos,
         maps=maps,
         longest_win_streak=win_streak,
         longest_loss_streak=loss_streak,
@@ -913,6 +1010,20 @@ def format_weekly_brief(report: WeeklyReport) -> str:
             h_lines.append("  " + t("ui.weekly.heroes_top_wr")
                            + " " + " · ".join(chips))
         blocks.append(h_lines)
+
+    # Hero combos
+    if report.hero_combos:
+        c_lines = [t("ui.weekly.section.combos")]
+        for c in report.hero_combos:
+            c_lines.append(
+                "  - " + t(
+                    "ui.weekly.combo_line",
+                    hero_a=c.hero_a, hero_b=c.hero_b,
+                    wins=c.wins, games=c.games,
+                    wr=_fmt_pct(c.winrate),
+                )
+            )
+        blocks.append(c_lines)
 
     # Maps
     if report.maps:

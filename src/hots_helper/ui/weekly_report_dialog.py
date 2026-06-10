@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from ..db import Store
 from ..i18n import t
 from ..weekly_report import (
+    HeroComboStat,
     HeroPickStat,
     HighlightMatch,
     MapStat,
@@ -246,6 +247,8 @@ class WeeklyReportDialog(QDialog):
             self._render_highlights(report.highlights)
         if report.hero_top_picked or report.hero_top_winrate:
             self._render_heroes(report.hero_top_picked, report.hero_top_winrate)
+        if report.hero_combos:
+            self._render_combos(report.hero_combos)
         if report.maps:
             self._render_maps(report.maps)
         self._render_streaks(report.longest_win_streak, report.longest_loss_streak)
@@ -362,6 +365,23 @@ class WeeklyReportDialog(QDialog):
             )
             v.addWidget(_line(
                 f"<b>{t('ui.weekly.heroes_top_wr')}</b> {chips}"
+            ))
+        self._body.addWidget(frame)
+
+    def _render_combos(self, combos: list[HeroComboStat]) -> None:
+        frame, v = _section(t("ui.weekly.section.combos"))
+        for c in combos:
+            # Tint the winrate green when the combo is winning, so the
+            # standout pairings read at a glance.
+            wr_color = "#7c7" if c.winrate >= 0.5 else TEXT_DIM
+            v.addWidget(_line(
+                t(
+                    "ui.weekly.combo_line",
+                    hero_a=f"<b>{c.hero_a}</b>",
+                    hero_b=f"<b>{c.hero_b}</b>",
+                    wins=c.wins, games=c.games,
+                    wr=f"<span style='color:{wr_color};'>{_fmt_pct(c.winrate)}</span>",
+                )
             ))
         self._body.addWidget(frame)
 
