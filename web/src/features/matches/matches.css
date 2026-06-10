@@ -1,0 +1,110 @@
+.match-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.match-row {
+  display: block;
+  color: inherit;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  transition: border-color var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+.match-row:hover {
+  border-color: var(--color-border-strong);
+  transform: translateX(2px);
+}
+
+.match-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.match-meta .map {
+  font-weight: 700;
+}
+.match-meta .mode,
+.match-meta time {
+  font-size: var(--text-xs);
+}
+
+.teams {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-3);
+}
+.teams .vs {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  font-weight: 700;
+}
+
+.team {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.team.won {
+  background: oklch(74% 0.16 150 / 0.08);
+}
+.team.lost {
+  background: oklch(67% 0.18 25 / 0.06);
+}
+.team.mirror {
+  flex-direction: row-reverse;
+}
+
+.team .outcome {
+  font-size: var(--text-xs);
+  flex-shrink: 0;
+}
+
+.team .heroes {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+}
+.team.mirror .heroes {
+  justify-content: flex-end;
+}
+.team .heroes li {
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.team .heroes li.me {
+  color: var(--color-accent-strong);
+  border-color: var(--color-accent);
+  font-weight: 700;
+}
+
+/* --- detail --- */
+.team-block {
+  margin-bottom: var(--space-6);
+}
+.team-block h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.bans {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}

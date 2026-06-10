@@ -39,11 +39,11 @@ DEFAULT_MODE_FILTER: tuple[str, ...] = ("Storm League",)
 #   cc            — every stun ticks ~0.3-0.5s; > 1.0s = real CC chains
 #                   rather than incidental disruptors.
 _METRIC_CONTRIB_THRESHOLDS: dict[str, int] = {
-    "healing":          1000,
-    "damage_soaked":    5000,
+    "healing": 1000,
+    "damage_soaked": 5000,
     "structure_damage": 1000,
-    "siege_damage":     5000,
-    "damage_taken":     30000,
+    "siege_damage": 5000,
+    "damage_taken": 30000,
     "time_cc_enemy_heroes": 1,
 }
 
@@ -89,7 +89,9 @@ def _avg_when(metric: str, *, alias: str) -> str:
     )
 
 
-def _mode_clause(mode_filter: tuple[str, ...] | None, alias: str = "r") -> tuple[str, list[Any]]:
+def _mode_clause(
+    mode_filter: tuple[str, ...] | None, alias: str = "r"
+) -> tuple[str, list[Any]]:
     """Build a ``WHERE``-ready clause + params for filtering by mode.
 
     Callers pass ``None`` to disable filtering entirely (for all-history
@@ -143,24 +145,62 @@ def default_db_path() -> Path:
 
 
 _PLAYER_MATCH_COLUMNS = [
-    "replay_id", "slot", "toon_handle", "display_name", "hero", "hero_id",
-    "skin", "banner", "team", "result",
-    "kills", "deaths", "assists", "takedowns", "solo_kills", "level",
-    "hero_damage", "siege_damage", "structure_damage",
-    "creep_damage", "minion_damage", "minion_kills", "summon_damage",
-    "physical_damage", "spell_damage",
-    "healing", "self_healing", "damage_taken", "damage_soaked",
-    "teamfight_hero_damage", "teamfight_healing", "teamfight_damage_taken",
+    "replay_id",
+    "slot",
+    "toon_handle",
+    "display_name",
+    "hero",
+    "hero_id",
+    "skin",
+    "banner",
+    "team",
+    "result",
+    "kills",
+    "deaths",
+    "assists",
+    "takedowns",
+    "solo_kills",
+    "level",
+    "hero_damage",
+    "siege_damage",
+    "structure_damage",
+    "creep_damage",
+    "minion_damage",
+    "minion_kills",
+    "summon_damage",
+    "physical_damage",
+    "spell_damage",
+    "healing",
+    "self_healing",
+    "damage_taken",
+    "damage_soaked",
+    "teamfight_hero_damage",
+    "teamfight_healing",
+    "teamfight_damage_taken",
     "teamfight_escapes",
-    "experience_contribution", "time_spent_dead", "time_on_point",
-    "merc_camp_captures", "watch_tower_captures", "regen_globes",
-    "town_kills", "meta_experience",
-    "time_cc_enemy_heroes", "time_stunning_enemy_heroes",
-    "time_rooting_enemy_heroes", "time_silencing_enemy_heroes",
-    "highest_kill_streak", "multikill", "escapes_performed",
-    "vengeances_performed", "outnumbered_deaths", "clutch_heals",
-    "protection_given_to_allies", "on_fire_time",
-    "talents", "awards", "hero_mastery_tiers",
+    "experience_contribution",
+    "time_spent_dead",
+    "time_on_point",
+    "merc_camp_captures",
+    "watch_tower_captures",
+    "regen_globes",
+    "town_kills",
+    "meta_experience",
+    "time_cc_enemy_heroes",
+    "time_stunning_enemy_heroes",
+    "time_rooting_enemy_heroes",
+    "time_silencing_enemy_heroes",
+    "highest_kill_streak",
+    "multikill",
+    "escapes_performed",
+    "vengeances_performed",
+    "outnumbered_deaths",
+    "clutch_heals",
+    "protection_given_to_allies",
+    "on_fire_time",
+    "talents",
+    "awards",
+    "hero_mastery_tiers",
 ]
 
 
@@ -242,6 +282,7 @@ class Store:
 
     def _migrate(self) -> None:
         """Add columns that may be missing from older DBs."""
+
         def _cols(table: str) -> set[str]:
             return {
                 r["name"]
@@ -291,11 +332,17 @@ class Store:
 
         rp_cols = _cols("replays")
         if "bans_team0" not in rp_cols:
-            self.conn.execute("ALTER TABLE replays ADD COLUMN bans_team0 TEXT NOT NULL DEFAULT ''")
+            self.conn.execute(
+                "ALTER TABLE replays ADD COLUMN bans_team0 TEXT NOT NULL DEFAULT ''"
+            )
         if "bans_team1" not in rp_cols:
-            self.conn.execute("ALTER TABLE replays ADD COLUMN bans_team1 TEXT NOT NULL DEFAULT ''")
+            self.conn.execute(
+                "ALTER TABLE replays ADD COLUMN bans_team1 TEXT NOT NULL DEFAULT ''"
+            )
         if "match_key" not in rp_cols:
-            self.conn.execute("ALTER TABLE replays ADD COLUMN match_key TEXT NOT NULL DEFAULT ''")
+            self.conn.execute(
+                "ALTER TABLE replays ADD COLUMN match_key TEXT NOT NULL DEFAULT ''"
+            )
         if "random_seed" not in rp_cols:
             self.conn.execute(
                 "ALTER TABLE replays ADD COLUMN random_seed INTEGER NOT NULL DEFAULT 0"
@@ -347,8 +394,9 @@ class Store:
         ).fetchone()
         return row is not None
 
-    def scan_index_touch(self, path: str, mtime_ns: int, size: int,
-                         file_hash: str, seen_at: str) -> None:
+    def scan_index_touch(
+        self, path: str, mtime_ns: int, size: int, file_hash: str, seen_at: str
+    ) -> None:
         with self._lock:
             self.conn.execute(
                 """
@@ -747,11 +795,11 @@ class Store:
                    AVG(pm.deaths)           AS avg_d,
                    AVG(pm.assists)          AS avg_a,
                    AVG(pm.hero_damage)      AS avg_hero_dmg,
-                   {_avg_when("siege_damage",        alias="avg_siege_dmg")},
-                   {_avg_when("structure_damage",    alias="avg_structure_dmg")},
-                   {_avg_when("healing",             alias="avg_healing")},
-                   {_avg_when("damage_taken",        alias="avg_dmg_taken")},
-                   {_avg_when("damage_soaked",       alias="avg_dmg_soaked")},
+                   {_avg_when("siege_damage", alias="avg_siege_dmg")},
+                   {_avg_when("structure_damage", alias="avg_structure_dmg")},
+                   {_avg_when("healing", alias="avg_healing")},
+                   {_avg_when("damage_taken", alias="avg_dmg_taken")},
+                   {_avg_when("damage_soaked", alias="avg_dmg_soaked")},
                    AVG(pm.experience_contribution) AS avg_xp,
                    {_avg_when("time_cc_enemy_heroes", alias="avg_cc")},
                    MAX(r.played_at)         AS last_seen_at
@@ -833,11 +881,11 @@ class Store:
                    AVG(pm.deaths)           AS avg_d,
                    AVG(pm.assists)          AS avg_a,
                    AVG(pm.hero_damage)      AS avg_hero_dmg,
-                   {_avg_when("siege_damage",        alias="avg_siege_dmg")},
-                   {_avg_when("structure_damage",    alias="avg_structure_dmg")},
-                   {_avg_when("healing",             alias="avg_healing")},
-                   {_avg_when("damage_taken",        alias="avg_dmg_taken")},
-                   {_avg_when("damage_soaked",       alias="avg_dmg_soaked")},
+                   {_avg_when("siege_damage", alias="avg_siege_dmg")},
+                   {_avg_when("structure_damage", alias="avg_structure_dmg")},
+                   {_avg_when("healing", alias="avg_healing")},
+                   {_avg_when("damage_taken", alias="avg_dmg_taken")},
+                   {_avg_when("damage_soaked", alias="avg_dmg_soaked")},
                    AVG(pm.experience_contribution) AS avg_xp,
                    {_avg_when("time_cc_enemy_heroes", alias="avg_cc")},
                    MAX(r.played_at)         AS last_seen_at
@@ -999,11 +1047,11 @@ class Store:
                    AVG(pm.deaths)           AS avg_d,
                    AVG(pm.assists)          AS avg_a,
                    AVG(pm.hero_damage)      AS avg_hero_dmg,
-                   {_avg_when("siege_damage",        alias="avg_siege_dmg")},
-                   {_avg_when("structure_damage",    alias="avg_structure_dmg")},
-                   {_avg_when("healing",             alias="avg_healing")},
-                   {_avg_when("damage_taken",        alias="avg_dmg_taken")},
-                   {_avg_when("damage_soaked",       alias="avg_dmg_soaked")},
+                   {_avg_when("siege_damage", alias="avg_siege_dmg")},
+                   {_avg_when("structure_damage", alias="avg_structure_dmg")},
+                   {_avg_when("healing", alias="avg_healing")},
+                   {_avg_when("damage_taken", alias="avg_dmg_taken")},
+                   {_avg_when("damage_soaked", alias="avg_dmg_soaked")},
                    AVG(pm.experience_contribution) AS avg_xp,
                    {_avg_when("time_cc_enemy_heroes", alias="avg_cc")}
             FROM player_match pm
@@ -1063,7 +1111,10 @@ class Store:
         ).fetchall()
 
     def map_hero_winrates(
-        self, map_name: str, *, mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER
+        self,
+        map_name: str,
+        *,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
     ) -> list[sqlite3.Row]:
         """All heroes played on this map, with raw games/wins."""
         clause, mode_params = _mode_clause(mode_filter)
@@ -1187,4 +1238,139 @@ class Store:
             ORDER BY games DESC
             """,
             (toon_handle, *mode_params),
+        ).fetchall()
+
+    # --- match records (web browser) ----------------------------------------
+
+    def match_detail(
+        self, replay_id: int
+    ) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
+        """Return ``(replay_row, [player_match rows for all slots])``.
+
+        The roster is ordered by ``(team, slot)`` so the caller can split
+        it into the two five-player teams without re-sorting. Returns
+        ``(None, [])`` when the id is unknown — callers translate that to
+        a 404.
+
+        No mode filter: a detail view shows whatever the match actually
+        was, including ARAM games.
+        """
+        replay = self.conn.execute(
+            "SELECT * FROM replays WHERE id = ?", (replay_id,)
+        ).fetchone()
+        if replay is None:
+            return None, []
+        players = self.conn.execute(
+            """
+            SELECT pm.*, r.map_name, r.mode, r.played_at, r.duration_s,
+                   r.winner_team
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            WHERE pm.replay_id = ?
+            ORDER BY pm.team, pm.slot
+            """,
+            (replay_id,),
+        ).fetchall()
+        return replay, players
+
+    def list_matches(
+        self,
+        *,
+        map_name: str | None = None,
+        mode: str | None = "Storm League",
+        player: str | None = None,
+        result: int | None = None,
+        since_iso: str | None = None,
+        until_iso: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[sqlite3.Row], int]:
+        """Filtered, paginated replay list ordered by ``played_at`` DESC.
+
+        Returns ``(rows, total_count)`` where ``total_count`` is the match
+        count for the same filters without ``LIMIT``/``OFFSET`` so the UI
+        can render pagination controls.
+
+        Filters:
+        - ``map_name`` / ``mode`` — exact match. Pass ``mode=None`` to
+          include every mode (default keeps Storm League, matching the
+          rest of the app).
+        - ``player`` — a ``toon_handle`` *or* ``display_name``. When set,
+          the query joins ``player_match`` so a match counts only if that
+          player appeared in it.
+        - ``result`` — ``1`` win / ``0`` loss, interpreted from that
+          ``player``'s perspective (the DB stores ``1`` win / ``2`` loss,
+          so a ``0`` request maps to ``result != 1``). Only meaningful
+          together with ``player``; ignored otherwise.
+        - ``since_iso`` / ``until_iso`` — half-open ``[since, until)`` on
+          ``played_at``.
+        """
+        where: list[str] = ["1=1"]
+        params: list[Any] = []
+        join = ""
+
+        if player:
+            join = "JOIN player_match pm ON pm.replay_id = r.id"
+            where.append("(pm.toon_handle = ? OR pm.display_name = ?)")
+            params.extend([player, player])
+            if result is not None:
+                if result == 1:
+                    where.append("pm.result = 1")
+                else:
+                    where.append("pm.result != 1")
+
+        if map_name:
+            where.append("r.map_name = ?")
+            params.append(map_name)
+        if mode:
+            where.append("r.mode = ?")
+            params.append(mode)
+        if since_iso:
+            where.append("r.played_at >= ?")
+            params.append(since_iso)
+        if until_iso:
+            where.append("r.played_at < ?")
+            params.append(until_iso)
+
+        where_sql = " AND ".join(where)
+
+        total = int(
+            self.conn.execute(
+                f"SELECT COUNT(*) FROM replays r {join} WHERE {where_sql}",
+                params,
+            ).fetchone()[0]
+        )
+
+        rows = self.conn.execute(
+            f"""
+            SELECT r.id, r.match_key, r.map_name, r.mode, r.played_at,
+                   r.duration_s, r.winner_team, r.bans_team0, r.bans_team1
+            FROM replays r {join}
+            WHERE {where_sql}
+            ORDER BY r.played_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+        return rows, total
+
+    def match_roster_brief(self, replay_ids: list[int]) -> list[sqlite3.Row]:
+        """``(replay_id, team, slot, hero, hero_id, display_name, result)``
+        for every player in the given replays, in one query.
+
+        Used by the match-list view to render each row's ten heroes
+        without an N+1 query per match. Returns ``[]`` for an empty id
+        list (an empty ``IN ()`` is a SQL syntax error).
+        """
+        if not replay_ids:
+            return []
+        placeholders = ",".join("?" for _ in replay_ids)
+        return self.conn.execute(
+            f"""
+            SELECT replay_id, team, slot, hero, hero_id, display_name, result
+            FROM player_match
+            WHERE replay_id IN ({placeholders})
+            ORDER BY replay_id, team, slot
+            """,
+            tuple(replay_ids),
         ).fetchall()

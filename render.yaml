@@ -1,0 +1,23 @@
+# Render Blueprint — one-click deploy of the HotS Helper web service.
+# Render builds the repo-root Dockerfile (multi-stage: SPA + slim Python
+# runtime) and injects $PORT, which hots-web already honours.
+#
+# Deploy: render.com → New → Blueprint → pick this repo. Render will
+# prompt for the three secrets below (sync: false = "ask me, don't store
+# in the repo").
+services:
+  - type: web
+    name: hots-helper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: HOTS_ACCESS_PASSWORD
+        sync: false
+      - key: HOTS_REFRESH_SECONDS
+        value: "600"

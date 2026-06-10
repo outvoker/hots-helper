@@ -39,3 +39,7 @@ supabase/.branches/
 
 # English report — Chinese is the canonical version
 REPORT.md
+src/hots_helper/web/static/
+web/node_modules/
+web/dist/
+.coverage
