@@ -81,6 +81,58 @@ def test_player_rankings(client):
     assert isinstance(body, list)
     if body:
         assert "power" in body[0] and "kda" in body[0]
+        # Every row carries the highlight flag.
+        assert "is_squad" in body[0]
+
+
+def test_squad_candidates(client):
+    body = client.get("/api/squad/candidates", params={"min_games": 1}).json()
+    assert "candidates" in body and "suggested" in body
+    assert isinstance(body["candidates"], list)
+    if body["candidates"]:
+        c = body["candidates"][0]
+        assert {"toon_handle", "display_name", "games"} <= c.keys()
+        # Ordered most-games-first.
+        games = [c["games"] for c in body["candidates"]]
+        assert games == sorted(games, reverse=True)
+
+
+def test_rankings_explicit_squad_flags_only_those(client):
+    # Pick a single seeded handle as "the squad"; only it should be flagged.
+    handle = "1-Hero-1-阿离"
+    body = client.get(
+        "/api/rankings/players",
+        params={"min_games": 1, "squad": handle},
+    ).json()
+    flagged = [r for r in body if r["is_squad"]]
+    assert all(r["toon_handle"] == handle for r in flagged)
+    # And the chosen handle is indeed present and flagged.
+    assert any(r["toon_handle"] == handle and r["is_squad"] for r in body)
+
+
+def test_rankings_blank_squad_falls_back_to_heuristic(client):
+    # A blank squad param must not crash — it's treated as "unset" and
+    # falls back to the server heuristic. (The seeded store has too few
+    # games to trigger the heuristic's min_games=20 threshold, so no rows
+    # are flagged; the point here is that the request is well-formed and
+    # behaves identically to omitting the param entirely.)
+    blank = client.get(
+        "/api/rankings/players",
+        params={"min_games": 1, "squad": " , "},
+    )
+    assert blank.status_code == 200
+    omitted = client.get("/api/rankings/players", params={"min_games": 1})
+    assert blank.json() == omitted.json()
+
+
+def test_weekly_explicit_squad(client):
+    body = client.get(
+        "/api/weekly",
+        params={"days": 3650, "squad": "1-Hero-1-阿离"},
+    ).json()
+    assert "overview" in body
+    handles = {p["toon_handle"] for p in body["players"]}
+    assert handles <= {"1-Hero-1-阿离"}
 
 
 def test_matches_list(client):

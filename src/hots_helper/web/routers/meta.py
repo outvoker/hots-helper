@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ... import heroes as heroes_data
 from ... import maps as maps_data
@@ -44,3 +44,20 @@ def reference() -> dict:
         "heroes": sorted(heroes_data.HERO_NAMES_ZH),
         "hero_roles": dict(HERO_ROLE),
     }
+
+
+@router.get("/squad/candidates")
+def squad_candidates(
+    min_games: int = Query(10, ge=1),
+    limit: int = Query(60, ge=1, le=200),
+    store: Store = Depends(get_store),
+) -> dict:
+    """Frequent players for the squad-picker UI, most games first.
+
+    The roster itself lives client-side (per browser); this endpoint
+    only supplies the candidate list to choose from. ``suggested`` is the
+    server's heuristic guess so a first-time user can one-click accept it.
+    """
+    candidates = store.squad_candidates(min_games=min_games, limit=limit)
+    suggested = sorted(store.squad_handles())
+    return {"candidates": candidates, "suggested": suggested}

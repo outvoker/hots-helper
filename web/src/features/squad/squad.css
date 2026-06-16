@@ -1,0 +1,234 @@
+.squad-picker {
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.squad-picker__head h2 {
+  font-size: var(--text-xl);
+  margin: 0 0 var(--space-2);
+}
+
+.squad-picker__head p {
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.squad-picker__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.squad-picker__bar input {
+  flex: 1;
+  background: var(--color-void);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  transition: border-color var(--duration-fast) var(--ease);
+}
+
+.squad-picker__bar input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.squad-picker__count {
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* selected chips row */
+.squad-picker__selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border-radius: 999px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease);
+}
+
+.chip--on {
+  border-color: var(--color-accent);
+  background: oklch(76% 0.15 195 / 0.16);
+}
+
+.chip:hover {
+  border-color: var(--color-accent-strong);
+}
+
+/* candidate list */
+.squad-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-void);
+}
+
+.squad-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1.5rem 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+  font-size: var(--text-sm);
+  transition: background var(--duration-fast) var(--ease);
+}
+
+.squad-row:hover {
+  background: var(--color-surface);
+}
+
+.squad-row--on {
+  background: oklch(76% 0.15 195 / 0.1);
+}
+
+.squad-row__check {
+  color: var(--color-accent);
+  font-weight: 700;
+  text-align: center;
+}
+
+.squad-row__name {
+  font-weight: 600;
+}
+
+.squad-row__handle {
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+}
+
+.squad-row__games {
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.squad-picker__empty {
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--color-text-faint);
+}
+
+.squad-picker__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* The "not yet configured" gate shown before the weekly report. */
+.squad-gate {
+  padding-top: var(--space-6);
+}
+
+/* Inline "edit roster" affordance on pages that use the squad. */
+.squad-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  color: var(--color-text-dim);
+}
+
+.squad-toolbar__names {
+  color: var(--color-text);
+}
+
+.squad-toolbar__edit {
+  background: none;
+  border: none;
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: 0;
+  text-decoration: underline;
+}
+
+.squad-toolbar__edit:hover {
+  color: var(--color-accent-strong);
+}
+
+/* Highlighted "this is us" rows in the rankings table. */
+tr.is-squad {
+  background: oklch(76% 0.15 195 / 0.12);
+}
+
+tr.is-squad td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.squad-tag {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  vertical-align: middle;
+}
+
+/* modal used by SquadToolbar re-edit */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: oklch(8% 0.02 270 / 0.7);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+  overflow-y: auto;
+  z-index: 50;
+  animation: modal-fade var(--duration) var(--ease);
+}
+
+.modal-body {
+  width: 100%;
+  max-width: 760px;
+}
+
+@keyframes modal-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

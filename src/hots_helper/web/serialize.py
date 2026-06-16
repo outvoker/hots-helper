@@ -188,6 +188,7 @@ def player_rank_row(r: Any) -> dict:
         "avg_cc": r.avg_cc,
         "power": r.power,
         "last_seen_at": r.last_seen_at,
+        "is_squad": r.is_squad,
     }
 
 

@@ -942,6 +942,45 @@ class Store:
         ).fetchall()
         return {r["toon_handle"] for r in rows}
 
+    def squad_candidates(
+        self,
+        *,
+        min_games: int = 10,
+        limit: int = 60,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+    ) -> list[dict]:
+        """Frequent players, most-played first, for the squad-picker UI.
+
+        Returns handle + display name + game count so the user can pick
+        who counts as "their squad". A looser ``min_games`` than
+        :meth:`squad_handles` so the picker surfaces everyone plausibly
+        on the roster, not just the auto-detected core.
+        """
+        clause, mode_params = _mode_clause(mode_filter)
+        rows = self.conn.execute(
+            f"""
+            SELECT pm.toon_handle,
+                   MAX(pm.display_name) AS display_name,
+                   COUNT(*) AS games
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            WHERE 1=1{clause}
+            GROUP BY pm.toon_handle
+            HAVING games >= ?
+            ORDER BY games DESC
+            LIMIT ?
+            """,
+            (*mode_params, min_games, limit),
+        ).fetchall()
+        return [
+            {
+                "toon_handle": r["toon_handle"],
+                "display_name": r["display_name"] or r["toon_handle"],
+                "games": int(r["games"]),
+            }
+            for r in rows
+        ]
+
     def side_split_vs_squad(
         self,
         toon_handle: str,

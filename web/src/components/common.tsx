@@ -1,17 +1,29 @@
 import { useEffect, useState } from "react";
 import { pct } from "../lib/format";
 
-/** Tiny async-data hook: tracks loading / error / data for a fetch fn. */
-export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
+/** Tiny async-data hook: tracks loading / error / data for a fetch fn.
+ *
+ * Pass ``enabled = false`` to defer the fetch (e.g. until a prerequisite
+ * like the squad roster is configured); the hook then reports neither
+ * loading nor data until it flips true. */
+export function useAsync<T>(
+  fn: () => Promise<T>,
+  deps: unknown[],
+  enabled = true,
+): {
   data: T | null;
   loading: boolean;
   error: string | null;
 } {
   const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -29,7 +41,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [...deps, enabled]);
 
   return { data, loading, error };
 }
