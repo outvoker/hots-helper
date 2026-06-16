@@ -490,8 +490,9 @@ def compute_player_rankings(
     hero: str | None = None,
     baseline: PowerBaseline | None = None,
     squad: tuple[str, ...] | None = None,
+    mode_filter: tuple[str, ...] | None = None,
 ) -> list[PlayerRankRow]:
-    """Return every player who has shared a match with the squad.
+    """Return every player in the DB with enough games, ranked by power.
 
     Pulls *all* matching rows from the DB, scores them, sorts by
     power descending, and assigns a permanent ``rank`` (1..N) based
@@ -502,22 +503,26 @@ def compute_player_rankings(
     ``hero`` restricts the aggregate to games where the player was
     on that hero (used by the player dialog's hero dropdown).
 
-    ``squad`` is the explicit member roster used for two things: which
-    games count as "shared with us" (the board population) and which
-    rows get flagged ``is_squad`` for highlighting. When ``None`` we
-    fall back to the :meth:`Store.squad_handles` heuristic.
+    ``squad`` is the viewer's roster — used ONLY to flag ``is_squad``
+    for highlighting. It does NOT scope the board population: the board
+    is every player with ``>= min_games`` in the mode, so toggling a
+    squad member never makes anyone appear/disappear. When ``None`` we
+    fall back to the :meth:`Store.squad_handles` heuristic for the
+    highlight (membership is unaffected either way).
+
+    ``mode_filter`` selects which game mode the board covers; ``None``
+    uses the store default (Storm League).
     """
     if squad is None:
         squad = tuple(store.squad_handles())
-    if not squad:
-        return []
     squad_set = set(squad)
 
-    rows = store.player_rankings_seen(
-        squad,
+    mode_kwargs = {} if mode_filter is None else {"mode_filter": mode_filter}
+    rows = store.player_rankings_all(
         min_games=min_games,
         limit=10_000,
         hero=hero,
+        **mode_kwargs,
     )
     if not rows:
         return []

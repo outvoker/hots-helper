@@ -66,11 +66,12 @@ export const api = {
       { limit, offset },
     ),
 
-  rankings: (minGames = 5, hero?: string, squad?: string) =>
+  rankings: (minGames = 5, hero?: string, squad?: string, mode?: string) =>
     get<PlayerRankRow[]>("/api/rankings/players", {
       min_games: minGames,
       hero,
       squad,
+      mode,
     }),
 
   squadCandidates: (minGames = 10, limit = 60) =>

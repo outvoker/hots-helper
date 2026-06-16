@@ -847,6 +847,61 @@ class Store:
             ),
         ).fetchall()
 
+    def player_rankings_all(
+        self,
+        *,
+        min_games: int = 5,
+        limit: int = 10_000,
+        hero: str | None = None,
+        mode_filter: tuple[str, ...] | None = DEFAULT_MODE_FILTER,
+    ) -> list[sqlite3.Row]:
+        """Per-player aggregate over **every** player in the DB.
+
+        Unlike :meth:`player_rankings_seen`, this is NOT scoped to games
+        the squad played in — it's "everyone who has logged enough games
+        in this mode", so the leaderboard population is stable regardless
+        of who the viewer marks as their squad. The squad selection only
+        drives row highlighting upstream, never membership.
+
+        ``hero`` restricts the aggregate to games on that hero; folds
+        繁體/alias spellings so a TW-localised row still matches.
+        """
+        clause, mode_params = _mode_clause(mode_filter)
+        hero_clause = ""
+        hero_params: list[Any] = []
+        if hero:
+            hero_clause = " AND canon_hero(pm.hero) = canon_hero(?)"
+            hero_params = [hero]
+        return self.conn.execute(
+            f"""
+            SELECT pm.toon_handle,
+                   COALESCE(p.display_name, MAX(pm.display_name)) AS display_name,
+                   COUNT(*) AS games,
+                   SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
+                   AVG(pm.kills)            AS avg_k,
+                   AVG(pm.deaths)           AS avg_d,
+                   AVG(pm.assists)          AS avg_a,
+                   AVG(pm.hero_damage)      AS avg_hero_dmg,
+                   {_avg_when("siege_damage", alias="avg_siege_dmg")},
+                   {_avg_when("structure_damage", alias="avg_structure_dmg")},
+                   {_avg_when("healing", alias="avg_healing")},
+                   {_avg_when("damage_taken", alias="avg_dmg_taken")},
+                   {_avg_when("damage_soaked", alias="avg_dmg_soaked")},
+                   AVG(pm.experience_contribution) AS avg_xp,
+                   {_avg_when("time_cc_enemy_heroes", alias="avg_cc")},
+                   MAX(r.played_at)         AS last_seen_at
+            FROM player_match pm
+            JOIN replays r ON r.id = pm.replay_id
+            LEFT JOIN players p ON p.toon_handle = pm.toon_handle
+            WHERE 1=1{clause}{hero_clause}
+            GROUP BY pm.toon_handle
+            HAVING COUNT(*) >= ?
+            ORDER BY games DESC
+            LIMIT ?
+            """,
+            (*mode_params, *hero_params, min_games, limit),
+        ).fetchall()
+
     def player_rankings_vs_squad(
         self,
         squad_handles: tuple[str, ...],

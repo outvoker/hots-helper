@@ -98,7 +98,19 @@ class PlayerRankDialog(QDialog):
         head.addWidget(self.title)
         head.addStretch(1)
 
-        # Hero filter — leftmost so it reads "玩家排行 [英雄: 全部] …".
+        # Mode filter — leftmost. The board scores one mode at a time
+        # (Storm League by default; ARAM hero pool is random so its
+        # numbers mean something different). Switching reloads + rebuilds
+        # the hero dropdown for that mode.
+        self.mode_label = QLabel()
+        head.addWidget(self.mode_label)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("风暴联赛", "Storm League")
+        self.mode_combo.addItem("天命乱斗", "ARAM")
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_change)
+        head.addWidget(self.mode_combo)
+
+        # Hero filter — next so it reads "玩家排行 [模式] [英雄: 全部] …".
         # Empty selection = all heroes (the default leaderboard).
         # The combo is editable so the user can type to search; the
         # attached QCompleter does substring-contains filtering, so
@@ -221,6 +233,9 @@ class PlayerRankDialog(QDialog):
     def _retranslate(self) -> None:
         self.setWindowTitle(t("ui.rank.window_title"))
         self.title.setText(t("ui.rank.title"))
+        self.mode_label.setText(t("ui.rank.mode_filter"))
+        self.mode_combo.setItemText(0, t("ui.rank.mode_sl"))
+        self.mode_combo.setItemText(1, t("ui.rank.mode_aram"))
         self.hero_label.setText(t("ui.rank.hero_filter"))
         # Refresh the "all heroes" sentinel label without losing the
         # current selection.
@@ -239,8 +254,18 @@ class PlayerRankDialog(QDialog):
         self._retranslate()
         self._reload()
 
+    def _current_mode(self) -> tuple[str, ...]:
+        """The selected mode as a single-element ``mode_filter`` tuple."""
+        data = self.mode_combo.currentData() if hasattr(self, "mode_combo") else None
+        return (data or "Storm League",)
+
+    def _on_mode_change(self, _i: int) -> None:
+        """Mode switch: rebuild the hero list for that mode, then reload."""
+        self._populate_hero_combo()
+        self._reload()
+
     def _populate_hero_combo(self) -> None:
-        """Fill the hero dropdown with every hero in the DB.
+        """Fill the hero dropdown with every hero in the current mode.
 
         ``itemData == None`` is the "all heroes" sentinel — kept as
         the first entry so the dialog opens unfiltered. Items are
@@ -253,7 +278,7 @@ class PlayerRankDialog(QDialog):
         self.hero_combo.clear()
         self.hero_combo.addItem(t("ui.rank.hero_all"), None)
         try:
-            rows = self.store.all_heroes()
+            rows = self.store.all_heroes(mode_filter=self._current_mode())
         except Exception:
             rows = []
         for r in sorted(rows, key=lambda x: x["hero"]):
@@ -290,9 +315,11 @@ class PlayerRankDialog(QDialog):
     def _reload_inner(self) -> None:
         min_games = self.min_games_spin.value()
         hero = self.hero_combo.currentData()  # None = all heroes
+        mode = self._current_mode()
 
-        # The configured roster (if any) scopes the board population and
-        # the highlight; otherwise fall back to the frequency heuristic.
+        # The board population is everyone with enough games in the mode;
+        # the configured roster (if any) ONLY drives row highlighting, so
+        # toggling a member never makes anyone appear/disappear.
         squad_override = (
             self.config.squad_override() if self.config is not None else None
         )
@@ -301,6 +328,7 @@ class PlayerRankDialog(QDialog):
             min_games=min_games,
             hero=hero,
             squad=squad_override,
+            mode_filter=mode,
         )
         # Squad set so we can tint our own rows in the table.
         self._squad_set: set[str] = set(

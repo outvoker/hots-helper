@@ -13,13 +13,19 @@ import {
   useAsync,
 } from "../../components/common";
 
+const MODES = [
+  { value: "Storm League", label: "风暴联赛" },
+  { value: "ARAM", label: "天命乱斗" },
+];
+
 export default function PlayerRankingsPage() {
   const { squad } = useSquad();
   const [minGames, setMinGames] = useState(5);
+  const [mode, setMode] = useState("Storm League");
   const param = squadParam(squad);
   const rank = useAsync(
-    () => api.rankings(minGames, undefined, param),
-    [minGames, param],
+    () => api.rankings(minGames, undefined, param, mode),
+    [minGames, param, mode],
   );
 
   if (rank.loading) return <Loading />;
@@ -30,7 +36,7 @@ export default function PlayerRankingsPage() {
     <>
       <PageHead
         title="玩家战力榜"
-        subtitle="所有与战队同场过的玩家，按综合战力分（全库百分位）排序"
+        subtitle="按综合战力分（全库百分位）排序；小队成员高亮显示"
       />
 
       <div style={{ marginBottom: "var(--space-4)" }}>
@@ -38,6 +44,16 @@ export default function PlayerRankingsPage() {
       </div>
 
       <div className="filters">
+        <label className="muted">
+          模式：
+          <select value={mode} onChange={(e) => setMode(e.target.value)}>
+            {MODES.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="muted">
           最少场次：
           <select
