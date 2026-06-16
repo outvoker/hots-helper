@@ -9,9 +9,21 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..hero_roles import canonical_hero
 from ..parser.replay import PlayerMatch, Replay
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+
+def _canon_hero_sql(hero: str | None) -> str | None:
+    """SQLite-registered wrapper around :func:`canonical_hero`.
+
+    Passes ``NULL`` straight through (SQLite hands us ``None``) so the
+    function is safe on any column.
+    """
+    if hero is None:
+        return None
+    return canonical_hero(hero)
 
 # Default mode filter applied to every stats query. ARAM games are kept in the
 # DB (useful for player-history lookups) but we never use them for BP / winrate
@@ -210,6 +222,14 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # Fold 繁體/alias hero spellings to their zh-CN canonical form
+        # inside SQL, so ``GROUP BY canon_hero(pm.hero)`` merges a
+        # TW/KR-localised replay's "維拉" with "维拉" into one row (and
+        # the aggregates re-compute correctly over the merged group).
+        # ``deterministic=True`` lets SQLite use it in indexes/GROUP BY.
+        self.conn.create_function(
+            "canon_hero", 1, _canon_hero_sql, deterministic=True
+        )
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self._lock = threading.RLock()
@@ -652,8 +672,8 @@ class Store:
         clause, mode_params = _mode_clause(mode_filter)
         sql = f"""
             SELECT
-                pm.hero,
-                pm.hero_id,
+                canon_hero(pm.hero)             AS hero,
+                MAX(pm.hero_id)                 AS hero_id,
                 COUNT(*) AS games,
                 SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
                 AVG(pm.kills)                   AS avg_k,
@@ -676,7 +696,7 @@ class Store:
         if map_name:
             sql += " AND r.map_name = ?"
             params.append(map_name)
-        sql += " GROUP BY pm.hero, pm.hero_id ORDER BY games DESC, last_played DESC"
+        sql += " GROUP BY canon_hero(pm.hero) ORDER BY games DESC, last_played DESC"
         return self.conn.execute(sql, params).fetchall()
 
     def overall_for_handle(
@@ -783,7 +803,7 @@ class Store:
         hero_clause = ""
         hero_params: list[Any] = []
         if hero:
-            hero_clause = " AND pm.hero = ?"
+            hero_clause = " AND canon_hero(pm.hero) = canon_hero(?)"
             hero_params = [hero]
         return self.conn.execute(
             f"""
@@ -1079,7 +1099,7 @@ class Store:
         scores against."""
         clause, mode_params = _mode_clause(mode_filter)
         sql = f"""
-            SELECT pm.hero,
+            SELECT canon_hero(pm.hero) AS hero,
                    COUNT(*) AS games,
                    SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
                    AVG(pm.kills)            AS avg_k,
@@ -1101,7 +1121,7 @@ class Store:
         if map_name:
             sql += " AND r.map_name = ?"
             params.append(map_name)
-        sql += " GROUP BY pm.hero"
+        sql += " GROUP BY canon_hero(pm.hero)"
         return self.conn.execute(sql, params).fetchall()
 
     # --- hero-centric analytics ---------------------------------------------
@@ -1113,7 +1133,7 @@ class Store:
         clause, mode_params = _mode_clause(mode_filter)
         return self.conn.execute(
             f"""
-            SELECT pm.hero AS hero,
+            SELECT canon_hero(pm.hero) AS hero,
                    COUNT(*) AS games,
                    SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins,
                    AVG(pm.hero_damage) AS avg_hero_dmg,
@@ -1125,7 +1145,7 @@ class Store:
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
             WHERE 1=1{clause}
-            GROUP BY pm.hero
+            GROUP BY canon_hero(pm.hero)
             ORDER BY games DESC, wins DESC
             """,
             mode_params,
@@ -1142,7 +1162,7 @@ class Store:
                    SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE pm.hero = ?{clause}
+            WHERE canon_hero(pm.hero) = canon_hero(?){clause}
             GROUP BY r.map_name
             ORDER BY games DESC
             """,
@@ -1159,13 +1179,13 @@ class Store:
         clause, mode_params = _mode_clause(mode_filter)
         return self.conn.execute(
             f"""
-            SELECT pm.hero,
+            SELECT canon_hero(pm.hero) AS hero,
                    COUNT(*) AS games,
                    SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
             WHERE r.map_name = ?{clause}
-            GROUP BY pm.hero
+            GROUP BY canon_hero(pm.hero)
             ORDER BY games DESC
             """,
             (map_name, *mode_params),
@@ -1182,7 +1202,7 @@ class Store:
                    SUM(CASE WHEN pm.result = 1 THEN 1 ELSE 0 END) AS wins
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE pm.hero = ?{clause}
+            WHERE canon_hero(pm.hero) = canon_hero(?){clause}
             """,
             (hero, *mode_params),
         ).fetchone()
@@ -1210,7 +1230,7 @@ class Store:
             SELECT pm.talents, pm.result
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE pm.hero = ?{clause}
+            WHERE canon_hero(pm.hero) = canon_hero(?){clause}
         """
         if map_name:
             sql += " AND r.map_name = ?"
@@ -1253,7 +1273,7 @@ class Store:
                    AVG(pm.healing) AS avg_healing
             FROM player_match pm
             JOIN replays r ON r.id = pm.replay_id
-            WHERE pm.hero = ?{clause}
+            WHERE canon_hero(pm.hero) = canon_hero(?){clause}
             """,
             (hero, *mode_params),
         ).fetchone()

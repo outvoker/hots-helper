@@ -136,10 +136,12 @@ class WeeklyReportDialog(QDialog):
     when the user reopens.
     """
 
-    def __init__(self, store: Store, *, days: int = 7, parent=None) -> None:
+    def __init__(self, store: Store, *, days: int = 7, config=None,
+                 parent=None) -> None:
         super().__init__(parent)
         self.store = store
         self.days = days
+        self.config = config
         self.setWindowTitle(t("ui.weekly.dialog_title"))
         self.resize(720, 720)
         self.setStyleSheet(
@@ -162,6 +164,11 @@ class WeeklyReportDialog(QDialog):
             f"color:{GOLD}; font-size:14pt; font-weight:600;"
         )
         head.addWidget(self.title_label, 1)
+        # Re-select squad — only meaningful when we have a config to write.
+        self.squad_btn = QPushButton(t("ui.squad.reselect_btn"))
+        self.squad_btn.clicked.connect(self._reselect_squad)
+        self.squad_btn.setVisible(self.config is not None)
+        head.addWidget(self.squad_btn)
         self.copy_btn = QPushButton(t("ui.weekly.copy_btn"))
         self.copy_btn.clicked.connect(self._copy_to_clipboard)
         head.addWidget(self.copy_btn)
@@ -201,8 +208,39 @@ class WeeklyReportDialog(QDialog):
         except Exception:
             pass
 
-        self._report = build_weekly_report(self.store, days=self.days)
+        # First run: make the user choose a squad before we build a report
+        # (only when wired with a config; legacy callers skip the gate and
+        # get the heuristic).
+        if self.config is not None and not self.config.squad_configured:
+            self._render_gate()
+            return
+
+        squad = self.config.squad_override() if self.config is not None else None
+        self._report = build_weekly_report(self.store, days=self.days, squad=squad)
         self._render(self._report)
+
+    def _render_gate(self) -> None:
+        """Show a one-time prompt to pick the squad before the report."""
+        self._clear_body()
+        self.title_label.setText(t("ui.weekly.dialog_title"))
+        self.copy_btn.setVisible(False)
+        hint = _line(t("ui.squad.gate_hint"), color=TEXT_DIM)
+        self._body.addWidget(hint)
+        btn = QPushButton(t("ui.squad.dialog_title"))
+        btn.clicked.connect(self._reselect_squad)
+        self._body.addWidget(btn)
+        self._body.addStretch(1)
+
+    def _reselect_squad(self) -> None:
+        """Open the squad picker; rebuild the report if the roster changed."""
+        if self.config is None:
+            return
+        from .squad_picker_dialog import SquadPickerDialog
+
+        dlg = SquadPickerDialog(self.store, self.config, parent=self)
+        if dlg.exec():
+            self.copy_btn.setVisible(True)
+            self._reload()
 
     def _clear_body(self) -> None:
         while self._body.count():

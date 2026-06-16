@@ -177,6 +177,16 @@ _ALIASES: dict[str, str] = {
     "泰蘭妲": "泰兰德",
     "失落的維京人": "失落的维京人",
     "蘇爾": "祖尔",       # Xul TW spelling
+    # Additional 繁體 spellings observed in the replay DB (2026-06).
+    "伊芮爾": "伊瑞尔",
+    "凱莉根": "凯瑞甘",
+    "古爾丹": "古尔丹",
+    "奧莉爾": "奥莉尔",
+    "普羅比斯": "普罗比斯",
+    "泰瑞爾": "泰瑞尔",
+    "科爾蘇加德": "克尔苏加德",
+    "雷諾": "雷诺",
+    "瑪翼夫": "玛维",      # Maiev TW spelling
 }
 
 # Human-readable role names for display.
@@ -193,6 +203,19 @@ HEAL_ROLES: frozenset[str] = frozenset({"healer", "support"})
 FRONTLINE_ROLES: frozenset[str] = frozenset({"tank", "bruiser"})
 
 
+def canonical_hero(hero: str) -> str:
+    """Fold a 繁體/alias hero spelling to its canonical zh-CN form.
+
+    Returns the input unchanged when it's already canonical or unknown,
+    so it's safe to apply blanket-wide. Use this anywhere hero names are
+    grouped or displayed so a TW/KR-localised replay's "維拉" merges with
+    "维拉" instead of splitting into two rows.
+    """
+    if not hero:
+        return hero
+    return _ALIASES.get(hero, hero)
+
+
 def hero_role(hero: str) -> str | None:
     """Official role for a hero's localized name, or ``None`` if unknown.
 
@@ -202,5 +225,4 @@ def hero_role(hero: str) -> str | None:
     """
     if not hero:
         return None
-    canon = _ALIASES.get(hero, hero)
-    return HERO_ROLE.get(canon)
+    return HERO_ROLE.get(canonical_hero(hero))

@@ -166,6 +166,14 @@ class Config:
     supabase_anon_key: str = ""
     # Whether to sync automatically on startup + after each ingest.
     sync_auto: bool = True
+    # The user's squad roster — toon_handles that count as "us" in the
+    # weekly report and get highlighted in the rankings. Empty + not
+    # configured means "fall back to the play-frequency heuristic". We
+    # no longer assume a fixed five-person squad, so each install picks
+    # its own members. ``squad_configured`` distinguishes "deliberately
+    # empty" from "never chosen" so the weekly report can prompt once.
+    squad_handles: list[str] = field(default_factory=list)
+    squad_configured: bool = False
 
     @classmethod
     def load(cls) -> "Config":
@@ -195,6 +203,10 @@ class Config:
             supabase_url=str(raw.get("supabase_url") or ""),
             supabase_anon_key=str(raw.get("supabase_anon_key") or ""),
             sync_auto=bool(raw.get("sync_auto", True)),
+            squad_handles=[
+                str(h) for h in (raw.get("squad_handles") or []) if str(h).strip()
+            ],
+            squad_configured=bool(raw.get("squad_configured", False)),
         )
 
     @classmethod
@@ -206,6 +218,15 @@ class Config:
         config_path().write_text(
             json.dumps(asdict(self), ensure_ascii=False, indent=2), "utf-8"
         )
+
+    def squad_override(self) -> tuple[str, ...] | None:
+        """The configured roster as a tuple, or ``None`` to use the
+        heuristic. ``None`` when the user hasn't chosen yet *or* chose an
+        empty set — both mean "let the play-frequency heuristic decide"
+        rather than "report on nobody"."""
+        if not self.squad_configured or not self.squad_handles:
+            return None
+        return tuple(self.squad_handles)
 
     def effective_replay_dirs(self) -> list[Path]:
         """Expand every configured root into actual Replays/Multiplayer dirs."""

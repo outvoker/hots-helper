@@ -768,6 +768,29 @@ _translations: dict[str, dict[str, str]] = {
         "en": "{hero}  {wins}/{games} ({wr}) · KDA {kda} · HeroDmg {hd} · Heal {hl} · Taken {dt}",
     },
 
+    # === Squad picker ==================================================
+    "ui.squad.dialog_title": {"zh": "选择小队成员", "en": "Choose squad"},
+    "ui.squad.heading": {
+        "zh": "选择你的小队成员",
+        "en": "Pick your squad members",
+    },
+    "ui.squad.subtitle": {
+        "zh": "勾选与你常组队的玩家。周报和战力榜高亮都会按这份名单计算，之后可随时重选。",
+        "en": "Check the players you squad with. The weekly report and the "
+              "rankings highlight both follow this roster; you can re-select "
+              "anytime.",
+    },
+    "ui.squad.search_ph": {"zh": "搜索玩家名 / handle…", "en": "Search name / handle…"},
+    "ui.squad.row": {"zh": "{name}（{games} 场）", "en": "{name} ({games} games)"},
+    "ui.squad.count": {"zh": "已选 {n} 人", "en": "{n} selected"},
+    "ui.squad.save": {"zh": "保存名单", "en": "Save roster"},
+    "ui.squad.cancel": {"zh": "取消", "en": "Cancel"},
+    "ui.squad.reselect_btn": {"zh": "⚙ 重新选择小队", "en": "⚙ Re-select squad"},
+    "ui.squad.gate_hint": {
+        "zh": "第一次查看周报，请先选择你的小队成员。",
+        "en": "First time here — choose your squad members to continue.",
+    },
+
     # === Weekly squad report ===========================================
     "ui.weekly.btn": {"zh": "📅 本周战报", "en": "📅 Weekly report"},
     "ui.weekly.btn_tip": {

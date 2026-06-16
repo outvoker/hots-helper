@@ -78,9 +78,10 @@ COL_XP     = 12
 class PlayerRankDialog(QDialog):
     """Click-to-sort player leaderboard."""
 
-    def __init__(self, store: Store, parent=None) -> None:
+    def __init__(self, store: Store, config=None, parent=None) -> None:
         super().__init__(parent)
         self.store = store
+        self.config = config
         self.setMinimumSize(960, 620)
         self.resize(1180, 720)
         self._build_ui()
@@ -290,13 +291,23 @@ class PlayerRankDialog(QDialog):
         min_games = self.min_games_spin.value()
         hero = self.hero_combo.currentData()  # None = all heroes
 
+        # The configured roster (if any) scopes the board population and
+        # the highlight; otherwise fall back to the frequency heuristic.
+        squad_override = (
+            self.config.squad_override() if self.config is not None else None
+        )
         all_rows = compute_player_rankings(
             self.store,
             min_games=min_games,
             hero=hero,
+            squad=squad_override,
         )
         # Squad set so we can tint our own rows in the table.
-        self._squad_set: set[str] = set(self.store.squad_handles())
+        self._squad_set: set[str] = set(
+            squad_override
+            if squad_override is not None
+            else self.store.squad_handles()
+        )
         self._cached_all = all_rows
         if hero:
             self.summary.setText(

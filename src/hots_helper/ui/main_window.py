@@ -1051,7 +1051,7 @@ class MainWindow(QMainWindow):
         ):
             from .player_rank_dialog import PlayerRankDialog
             self._player_rank_dialog = PlayerRankDialog(
-                self.store, parent=self
+                self.store, config=self.config, parent=self
             )
         else:
             self._player_rank_dialog._reload()
@@ -1067,7 +1067,7 @@ class MainWindow(QMainWindow):
         ):
             from .weekly_report_dialog import WeeklyReportDialog
             self._weekly_dialog = WeeklyReportDialog(
-                self.store, days=7, parent=self,
+                self.store, days=7, config=self.config, parent=self,
             )
         else:
             self._weekly_dialog._reload()
