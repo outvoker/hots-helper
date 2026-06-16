@@ -757,12 +757,18 @@ def build_weekly_report(
     *,
     days: int = 7,
     now: datetime | None = None,
+    squad: tuple[str, ...] | None = None,
 ) -> WeeklyReport:
     """Compute every section of the weekly report in one pass.
 
     ``now`` is overridable so tests can pin the rolling window. The
     "previous week" baseline is the same-length window immediately
     preceding ``now - days``.
+
+    ``squad`` is the explicit list of member handles to report on. When
+    ``None`` we fall back to the :meth:`Store.squad_handles` heuristic,
+    preserving the original behaviour for callers that don't configure a
+    roster.
     """
     end_dt = (now or _now_utc())
     start_dt = end_dt - timedelta(days=days)
@@ -774,7 +780,8 @@ def build_weekly_report(
     prev_end_iso = prev_end_dt.isoformat()
     prev_start_iso = prev_start_dt.isoformat()
 
-    squad = tuple(store.squad_handles())
+    if squad is None:
+        squad = tuple(store.squad_handles())
     display_names = _display_name_lookup(store, squad)
 
     cur_rows = _fetch_squad_matches(

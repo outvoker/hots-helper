@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
 import { compact, pct } from "../../lib/format";
+import { squadParam, useSquad } from "../../lib/squad";
+import SquadToolbar from "../squad/SquadToolbar";
 import {
   Empty,
   ErrorState,
@@ -12,8 +14,13 @@ import {
 } from "../../components/common";
 
 export default function PlayerRankingsPage() {
+  const { squad } = useSquad();
   const [minGames, setMinGames] = useState(5);
-  const rank = useAsync(() => api.rankings(minGames), [minGames]);
+  const param = squadParam(squad);
+  const rank = useAsync(
+    () => api.rankings(minGames, undefined, param),
+    [minGames, param],
+  );
 
   if (rank.loading) return <Loading />;
   if (rank.error) return <ErrorState message={rank.error} />;
@@ -25,6 +32,10 @@ export default function PlayerRankingsPage() {
         title="玩家战力榜"
         subtitle="所有与战队同场过的玩家，按综合战力分（全库百分位）排序"
       />
+
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <SquadToolbar />
+      </div>
 
       <div className="filters">
         <label className="muted">
@@ -61,12 +72,13 @@ export default function PlayerRankingsPage() {
             </thead>
             <tbody>
               {rows.map((p) => (
-                <tr key={p.toon_handle}>
+                <tr key={p.toon_handle} className={p.is_squad ? "is-squad" : undefined}>
                   <td>{p.rank}</td>
                   <td>
                     <Link to={`/players/${encodeURIComponent(p.toon_handle)}`}>
                       {p.display_name || p.toon_handle}
                     </Link>
+                    {p.is_squad && <span className="squad-tag">小队</span>}
                   </td>
                   <td className="mono" style={{ fontWeight: 700 }}>
                     {p.power.toFixed(0)}

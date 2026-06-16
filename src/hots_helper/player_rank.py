@@ -38,6 +38,9 @@ class PlayerRankRow:
     # Composite "power" score in 0..100 (per-board population rescaling
     # is applied in :func:`_score_population`).
     power: float = 0.0
+    # Whether this handle is on the viewer's configured squad roster, so
+    # the UI can highlight "us". Set by :func:`compute_player_rankings`.
+    is_squad: bool = False
 
     @property
     def kda(self) -> float:
@@ -486,6 +489,7 @@ def compute_player_rankings(
     min_games: int = 5,
     hero: str | None = None,
     baseline: PowerBaseline | None = None,
+    squad: tuple[str, ...] | None = None,
 ) -> list[PlayerRankRow]:
     """Return every player who has shared a match with the squad.
 
@@ -497,10 +501,17 @@ def compute_player_rankings(
 
     ``hero`` restricts the aggregate to games where the player was
     on that hero (used by the player dialog's hero dropdown).
+
+    ``squad`` is the explicit member roster used for two things: which
+    games count as "shared with us" (the board population) and which
+    rows get flagged ``is_squad`` for highlighting. When ``None`` we
+    fall back to the :meth:`Store.squad_handles` heuristic.
     """
-    squad = tuple(store.squad_handles())
+    if squad is None:
+        squad = tuple(store.squad_handles())
     if not squad:
         return []
+    squad_set = set(squad)
 
     rows = store.player_rankings_seen(
         squad,
@@ -517,6 +528,10 @@ def compute_player_rankings(
     scored.sort(key=lambda p: -p.power)
 
     return [
-        PlayerRankRow(**{**p.__dict__, "rank": i + 1})
+        PlayerRankRow(**{
+            **p.__dict__,
+            "rank": i + 1,
+            "is_squad": p.toon_handle in squad_set,
+        })
         for i, p in enumerate(scored)
     ]

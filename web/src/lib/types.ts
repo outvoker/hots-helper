@@ -128,6 +128,18 @@ export interface PlayerRankRow {
   avg_dmg_taken: number;
   power: number;
   last_seen_at: string;
+  is_squad: boolean;
+}
+
+export interface SquadCandidate {
+  toon_handle: string;
+  display_name: string;
+  games: number;
+}
+
+export interface SquadCandidates {
+  candidates: SquadCandidate[];
+  suggested: string[];
 }
 
 export interface MatchListRow {

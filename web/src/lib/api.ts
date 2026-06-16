@@ -10,6 +10,7 @@ import type {
   PlayerRankRow,
   PlayerSummary,
   Reference,
+  SquadCandidates,
   Stats,
   WeeklyReport,
 } from "./types";
@@ -65,8 +66,18 @@ export const api = {
       { limit, offset },
     ),
 
-  rankings: (minGames = 5, hero?: string) =>
-    get<PlayerRankRow[]>("/api/rankings/players", { min_games: minGames, hero }),
+  rankings: (minGames = 5, hero?: string, squad?: string) =>
+    get<PlayerRankRow[]>("/api/rankings/players", {
+      min_games: minGames,
+      hero,
+      squad,
+    }),
+
+  squadCandidates: (minGames = 10, limit = 60) =>
+    get<SquadCandidates>("/api/squad/candidates", {
+      min_games: minGames,
+      limit,
+    }),
 
   matches: (f: MatchFilters) =>
     get<Paginated<MatchListRow>>("/api/matches", {
@@ -88,5 +99,6 @@ export const api = {
   bpPicks: (map: string, excludeHeroes: string[] = []) =>
     post<PickCandidate[]>("/api/bp/picks", { map, exclude_heroes: excludeHeroes }),
 
-  weekly: (days = 7) => get<WeeklyReport>("/api/weekly", { days }),
+  weekly: (days = 7, squad?: string) =>
+    get<WeeklyReport>("/api/weekly", { days, squad }),
 };

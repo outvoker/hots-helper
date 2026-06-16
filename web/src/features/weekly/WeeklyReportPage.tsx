@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { api } from "../../lib/api";
 import { compact, pct, shortDate } from "../../lib/format";
+import { squadParam, useSquad } from "../../lib/squad";
+import SquadPicker from "../squad/SquadPicker";
+import SquadToolbar from "../squad/SquadToolbar";
 import {
   Empty,
   ErrorState,
@@ -11,8 +14,31 @@ import {
 } from "../../components/common";
 
 export default function WeeklyReportPage() {
+  const { squad, save } = useSquad();
   const [days, setDays] = useState(7);
-  const report = useAsync(() => api.weekly(days), [days]);
+  const param = squadParam(squad);
+  // Re-fetch whenever the roster changes so the report follows it.
+  const report = useAsync(
+    () => api.weekly(days, param),
+    [days, param],
+    // Only fetch once a roster is configured.
+    squad.configured,
+  );
+
+  // First run: make the user pick their squad before showing the report.
+  if (!squad.configured) {
+    return (
+      <>
+        <PageHead title="战队周报" subtitle="可分享的滚动战绩复盘" />
+        <div className="squad-gate">
+          <SquadPicker
+            onSave={save}
+            subtitle="第一次查看周报，请先选择你的小队成员。周报、奖项和战力榜高亮都会按这份名单计算，之后可随时重选。"
+          />
+        </div>
+      </>
+    );
+  }
 
   if (report.loading) return <Loading />;
   if (report.error) return <ErrorState message={report.error} />;
@@ -22,6 +48,10 @@ export default function WeeklyReportPage() {
   return (
     <>
       <PageHead title="战队周报" subtitle="可分享的滚动战绩复盘" />
+
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <SquadToolbar />
+      </div>
 
       <div className="filters">
         <label className="muted">
