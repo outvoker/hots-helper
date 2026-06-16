@@ -15,7 +15,11 @@ Design notes
   the table's primary key, so re-runs are idempotent.
 * Pull uses ``inserted_at > <last>`` so we only fetch new rows. The
   ``last_pulled_at`` watermark is stored in a tiny JSON file in the
-  user data dir.
+  user data dir. All three tables carry ``inserted_at``; player_match
+  gained it via packaging/migrations/0001 — pre-migration projects fall
+  back to a full pull.
+* Pulls are paged in small chunks with per-page retry so a single
+  dropped TLS stream doesn't waste the whole pull.
 * All network IO runs from a worker thread; failures are logged but
   never raised to the UI.
 """
@@ -26,6 +30,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,6 +44,31 @@ from .db import Store
 from .parser.replay import PlayerMatch, Replay
 
 logger = logging.getLogger(__name__)
+
+
+# Network resilience for pulls. PostgREST happily streams thousands of
+# rows in one response, but a single large response (the player_match
+# table is ~35 MB) is exactly what a flaky connection drops mid-stream
+# with ``SSL UNEXPECTED_EOF_WHILE_READING``. We page in smaller chunks
+# and retry each page a few times so one dropped TCP stream no longer
+# wastes the whole pull.
+_PULL_PAGE_SIZE = 500
+_PULL_MAX_RETRIES = 4
+_PULL_RETRY_BACKOFF_S = 1.5
+
+# Watermark schema version. Bump this whenever a shipped bug left the
+# pull watermarks in a state that needs a one-time reset. On startup, a
+# client whose stored ``_v`` is lower clears all ``pull_*`` keys exactly
+# once and re-pulls from scratch (inserts are idempotent, so this only
+# *adds* the rows an older buggy build failed to land — it never
+# duplicates or corrupts existing data). ``push_*`` keys are left alone
+# so nobody re-uploads their whole history.
+#
+# v1: player_match watermark was never persisted (the cloud table had no
+#     ``inserted_at``), so every sync re-downloaded the full table and a
+#     dropped TLS stream meant new player rows silently never landed.
+#     Resetting pull watermarks lets the fixed client backfill them.
+_WATERMARK_VERSION = 1
 
 
 # Tables we sync, in dependency order (replays first because player_match
@@ -118,6 +148,37 @@ def _write_watermark(values: dict[str, str]) -> None:
     _watermark_path().write_text(json.dumps(values, indent=2), "utf-8")
 
 
+def _heal_watermark() -> None:
+    """One-time, idempotent reset of pull watermarks after a sync-bug fix.
+
+    Runs once per client whenever the stored ``_v`` is below
+    ``_WATERMARK_VERSION``. It drops every ``pull_*`` key (forcing a
+    full, from-scratch re-pull that backfills rows an older buggy build
+    failed to land) and stamps the new version so it never repeats.
+    ``push_*`` keys are preserved so the client doesn't re-upload its
+    whole local history. A fresh install (no file yet) is just stamped
+    with the current version — there's nothing to heal.
+    """
+    wm = _read_watermark()
+    current = wm.get("_v", 0)
+    try:
+        current = int(current)
+    except (TypeError, ValueError):
+        current = 0
+    if current >= _WATERMARK_VERSION:
+        return
+    pull_keys = [k for k in wm if k.startswith("pull_")]
+    if pull_keys:
+        logger.info(
+            "Healing sync watermark v%s→v%s: clearing %d pull key(s) to "
+            "backfill rows missed by an older build.",
+            current, _WATERMARK_VERSION, len(pull_keys),
+        )
+    healed = {k: v for k, v in wm.items() if not k.startswith("pull_")}
+    healed["_v"] = _WATERMARK_VERSION
+    _write_watermark(healed)
+
+
 # --- Supabase REST helpers -------------------------------------------------
 
 
@@ -156,33 +217,63 @@ class _RestClient:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 resp.read()
 
+    def _get_page(self, table: str, params: list[tuple[str, str]]) -> list[dict[str, Any]]:
+        """Fetch one page, retrying on transient network failures.
+
+        A dropped TCP/TLS stream (``SSL UNEXPECTED_EOF_WHILE_READING``,
+        connection reset, timeout) raises ``URLError``; we retry that
+        page a few times with linear backoff before giving up. HTTP 4xx
+        responses are *not* retried — they won't fix themselves.
+        """
+        qs = urllib.parse.urlencode(params, safe=":,.~")
+        url = f"{self.base}/{table}?{qs}"
+        last_err: Exception | None = None
+        for attempt in range(1, _PULL_MAX_RETRIES + 1):
+            try:
+                req = urllib.request.Request(url, headers=self.headers_get,
+                                             method="GET")
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.loads(resp.read().decode("utf-8") or "[]")
+            except urllib.error.HTTPError:
+                # Server said no (4xx/5xx with a body) — surface it, don't retry.
+                raise
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                last_err = e
+                if attempt < _PULL_MAX_RETRIES:
+                    logger.warning(
+                        "pull page failed (%s), retry %d/%d: %s",
+                        table, attempt, _PULL_MAX_RETRIES - 1, e,
+                    )
+                    time.sleep(_PULL_RETRY_BACKOFF_S * attempt)
+        assert last_err is not None
+        raise last_err
+
     def select_since(self, table: str, since_iso: str | None,
                      order_col: str = "inserted_at") -> list[dict[str, Any]]:
-        """Fetch all rows where ``order_col`` > ``since_iso`` (or all rows)."""
+        """Fetch all rows where ``order_col`` > ``since_iso`` (or all rows).
+
+        Paged in small chunks with per-page retry so one dropped stream
+        doesn't waste the whole pull. Ordering by ``order_col`` keeps
+        offset paging stable as long as the column is unique enough; for
+        non-unique columns (e.g. a batch sharing one ``inserted_at``) we
+        still converge because every chunk advances the offset.
+        """
         params: list[tuple[str, str]] = [("select", "*"), ("order", order_col)]
         if since_iso:
             # PostgREST filter syntax: column=op.value — gt = greater than.
             params.append((order_col, f"gt.{since_iso}"))
         rows: list[dict[str, Any]] = []
-        page_size = 1000
         offset = 0
         while True:
             paged = params + [
-                ("limit", str(page_size)),
+                ("limit", str(_PULL_PAGE_SIZE)),
                 ("offset", str(offset)),
             ]
-            qs = urllib.parse.urlencode(paged, safe=":,.~")
-            req = urllib.request.Request(
-                f"{self.base}/{table}?{qs}",
-                headers=self.headers_get,
-                method="GET",
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                batch = json.loads(resp.read().decode("utf-8") or "[]")
+            batch = self._get_page(table, paged)
             rows.extend(batch)
-            if len(batch) < page_size:
+            if len(batch) < _PULL_PAGE_SIZE:
                 break
-            offset += page_size
+            offset += _PULL_PAGE_SIZE
         return rows
 
 
@@ -208,6 +299,9 @@ class CloudSync:
     def sync_now(self, progress: ProgressCallback = None) -> SyncResult:
         """One full round: push local-only rows, then pull cloud-newer rows."""
         with self._lock:
+            # Self-heal stale pull watermarks left by older buggy builds
+            # (runs at most once per client; see _heal_watermark).
+            _heal_watermark()
             errors: list[str] = []
             pushed = self._push_all(progress, errors)
             pulled = self._pull_all(progress, errors)
@@ -492,14 +586,41 @@ class CloudSync:
     def _pull_player_matches(self, watermark: dict[str, str],
                              progress: ProgressCallback,
                              errors: list[str]) -> int:
-        # player_match has no inserted_at on the local table, so we anchor
-        # cloud pulls on the cloud-side ``inserted_at``.
+        # The cloud ``player_match`` table carries an ``inserted_at``
+        # timestamp (added by the 0001 migration); we anchor incremental
+        # pulls on it. Ordering by ``inserted_at`` makes offset paging
+        # stable and lets us advance the watermark to the newest row we
+        # actually pulled, so subsequent syncs only fetch new rows
+        # instead of re-downloading the whole ~35 MB table every launch.
         since = watermark.get("pull_player_match")
+        # Whether the cloud table exposes ``inserted_at`` (post-migration).
+        # When it doesn't yet, fall back to a full, watermark-less pull
+        # ordered by the primary key so a not-yet-migrated project keeps
+        # working — just without the incremental optimisation.
+        has_inserted_at = True
         try:
             rows = self._client.select_since("player_match", since,
-                                             order_col="match_key")
-            # Re-filter strictly by inserted_at since we asked the server
-            # to order by match_key for stable paging.
+                                             order_col="inserted_at")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            if e.code == 400 and "inserted_at" in body:
+                # Column missing — pre-migration project. Full pull.
+                logger.warning(
+                    "player_match has no inserted_at column yet; falling "
+                    "back to a full pull (run the 0001 migration to enable "
+                    "incremental sync)."
+                )
+                has_inserted_at = False
+                try:
+                    rows = self._client.select_since(
+                        "player_match", None, order_col="match_key")
+                except Exception as e2:
+                    errors.append(
+                        f"pull player_match failed: {type(e2).__name__}: {e2}")
+                    return 0
+            else:
+                errors.append(f"pull player_match failed: HTTP {e.code}: {body[:200]}")
+                return 0
         except Exception as e:
             errors.append(f"pull player_match failed: {type(e).__name__}: {e}")
             return 0
@@ -519,6 +640,18 @@ class CloudSync:
         applied = 0
         skipped_no_replay = 0
         fk_errors = 0
+        # Track the earliest ``inserted_at`` we had to skip (its parent
+        # replay wasn't replicated yet, or an FK check failed). We must
+        # NOT advance the watermark past it, or the next ``gt.<wm>`` pull
+        # would never re-fetch it and the row would be lost forever.
+        earliest_skipped: str | None = None
+
+        def _mark_skipped(row: dict[str, Any]) -> None:
+            nonlocal earliest_skipped
+            ts = row.get("inserted_at") or ""
+            if ts and (earliest_skipped is None or ts < earliest_skipped):
+                earliest_skipped = ts
+
         with self.store._lock:
             for r in rows:
                 rid = self.store.conn.execute(
@@ -527,6 +660,7 @@ class CloudSync:
                 ).fetchone()
                 if rid is None:
                     skipped_no_replay += 1
+                    _mark_skipped(r)
                     continue
                 replay_id = int(rid["id"])
                 # Skip if we already have this slot.
@@ -577,6 +711,7 @@ class CloudSync:
                     # yet; the next sync will pick it up once the
                     # missing parents arrive.
                     fk_errors += 1
+                    _mark_skipped(r)
                     if fk_errors <= 5:
                         errors.append(
                             f"player_match FK skip "
@@ -586,9 +721,34 @@ class CloudSync:
                     continue
                 applied += 1
             self.store.conn.commit()
-        latest = max(r.get("inserted_at") or "" for r in rows)
-        if latest:
-            watermark["pull_player_match"] = latest
+        if skipped_no_replay or fk_errors:
+            logger.info(
+                "player_match pull: applied=%d skipped_no_replay=%d fk_errors=%d",
+                applied, skipped_no_replay, fk_errors,
+            )
+        # Advance the watermark to the newest row pulled — but never to or
+        # past the earliest row we had to skip, since the next pull uses a
+        # strict ``gt.<watermark>`` filter and would otherwise never
+        # re-fetch the skipped row once its parent replay arrives.
+        #
+        # Only meaningful when the server has ``inserted_at``. On the
+        # pre-migration fallback path the rows carry no timestamp, so we
+        # leave the watermark unset and keep doing full pulls until the
+        # migration lands.
+        if has_inserted_at:
+            if earliest_skipped is None:
+                latest = max((r.get("inserted_at") or "" for r in rows), default="")
+            else:
+                # Largest inserted_at strictly older than the earliest skip.
+                safe = [
+                    ts for r in rows
+                    if (ts := (r.get("inserted_at") or "")) and ts < earliest_skipped
+                ]
+                # If nothing predates the skip, leave the watermark
+                # untouched rather than regressing it.
+                latest = max(safe) if safe else (since or "")
+            if latest:
+                watermark["pull_player_match"] = latest
         return applied
 
 

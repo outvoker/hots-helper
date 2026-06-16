@@ -107,12 +107,18 @@ CREATE TABLE IF NOT EXISTS player_match (
     talents                    TEXT NOT NULL DEFAULT '',
     awards                     TEXT NOT NULL DEFAULT '',
     hero_mastery_tiers         TEXT NOT NULL DEFAULT '',
+    -- ``inserted_at`` anchors incremental pulls (CloudSync orders and
+    -- filters on it). Without it, every sync re-downloads the whole
+    -- table — fine when small, but a flaky connection drops the large
+    -- response mid-stream once the table grows.
+    inserted_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (match_key, slot)
 );
 
-CREATE INDEX IF NOT EXISTS idx_pm_toon   ON player_match(toon_handle);
-CREATE INDEX IF NOT EXISTS idx_pm_name   ON player_match(display_name);
-CREATE INDEX IF NOT EXISTS idx_pm_hero   ON player_match(hero);
+CREATE INDEX IF NOT EXISTS idx_pm_toon     ON player_match(toon_handle);
+CREATE INDEX IF NOT EXISTS idx_pm_name     ON player_match(display_name);
+CREATE INDEX IF NOT EXISTS idx_pm_hero     ON player_match(hero);
+CREATE INDEX IF NOT EXISTS idx_pm_inserted ON player_match(inserted_at);
 
 -- =============================================================
 -- Row-level security
