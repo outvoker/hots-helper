@@ -49,6 +49,10 @@ def test_hero_detail(client):
     assert body["hero"] == "李敏"
     assert "winrate" in body
     assert "talents_by_tier" in body
+    # Each talent choice carries a localized label, not just the raw ID.
+    for choices in body["talents_by_tier"].values():
+        for choice in choices:
+            assert "talent_label" in choice
 
 
 def test_hero_detail_unknown_404(client):

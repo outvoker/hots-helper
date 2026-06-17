@@ -36,6 +36,7 @@ export interface MapRecord {
 
 export interface TalentChoice {
   talent: string;
+  talent_label: string;
   games: number;
   wins: number;
   pick_rate: number;

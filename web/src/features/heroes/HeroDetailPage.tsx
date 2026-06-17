@@ -87,7 +87,7 @@ export default function HeroDetailPage() {
                     .map((c, i) => (
                       <tr key={`${tier}-${c.talent}`}>
                         <td>{i === 0 ? `T${tier}` : ""}</td>
-                        <td>{c.talent}</td>
+                        <td>{c.talent_label || c.talent}</td>
                         <td>{c.games}</td>
                         <td>{c.games ? pct(c.wins / c.games) : "—"}</td>
                         <td>{pct(c.pick_rate)}</td>

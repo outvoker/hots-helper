@@ -44,6 +44,8 @@ def hero_aggregate_row(row: Any) -> dict:
 
 def hero_report(report: Any) -> dict:
     """A :class:`hots_helper.lookup.HeroReport`."""
+    from ..talent_names import talent_label
+
     return {
         "hero": report.hero,
         "total_games": report.total_games,
@@ -57,6 +59,7 @@ def hero_report(report: Any) -> dict:
             str(tier): [
                 {
                     "talent": talent,
+                    "talent_label": talent_label(talent),
                     "games": games,
                     "wins": wins,
                     "pick_rate": pick_rate,
