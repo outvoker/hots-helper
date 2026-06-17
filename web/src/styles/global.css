@@ -56,6 +56,73 @@ h3 {
   display: grid;
   grid-template-columns: 232px 1fr;
   min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Mobile-only top bar with the menu trigger. Hidden on desktop where the
+   sidebar is always visible. */
+.app-header {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  padding-top: max(var(--space-3), env(safe-area-inset-top));
+  background: oklch(19% 0.035 268 / 0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--color-border);
+}
+.app-header .brand {
+  font-size: var(--text-base);
+}
+.app-header__menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  cursor: pointer;
+}
+.app-header__bars,
+.app-header__bars::before,
+.app-header__bars::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-text);
+  transition: transform var(--duration-fast) var(--ease);
+}
+.app-header__bars {
+  position: relative;
+}
+.app-header__bars::before {
+  position: absolute;
+  top: -6px;
+}
+.app-header__bars::after {
+  position: absolute;
+  top: 6px;
+}
+
+/* Dimming scrim behind the mobile drawer. Inert until the drawer opens. */
+.scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  border: none;
+  background: oklch(8% 0.02 270 / 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration) var(--ease);
 }
 
 .sidebar {
@@ -74,6 +141,8 @@ h3 {
   flex-direction: column;
   gap: var(--space-6);
 }
+/* The sidebar's own brand is redundant with the header on mobile but is the
+   only brand on desktop, so it stays visible there. */
 
 .brand {
   font-size: var(--text-lg);
@@ -363,22 +432,160 @@ select:focus {
   gap: var(--space-2);
 }
 
-@media (max-width: 760px) {
+/* ============================================================
+   Responsive — tablet and phone
+   The desktop layout is a fixed sidebar + content grid. Below 900px
+   the sidebar becomes an off-canvas drawer driven by a top header,
+   and content reflows to a single comfortable column.
+   ============================================================ */
+
+/* Tablet: tighten the desktop two-column layout before fully collapsing. */
+@media (max-width: 1100px) {
+  .app {
+    grid-template-columns: 200px 1fr;
+  }
+  .main {
+    padding: var(--space-section) var(--space-6) var(--space-12);
+  }
+}
+
+@media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;
   }
+
+  .app-header {
+    display: flex;
+  }
+
+  /* Sidebar becomes an off-canvas drawer, slid out of view by default. */
   .sidebar {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 50;
+    width: min(82vw, 300px);
+    height: 100vh;
+    height: 100dvh;
+    padding-top: max(var(--space-6), env(safe-area-inset-top));
+    box-shadow: var(--shadow-2);
+    transform: translateX(-100%);
+    transition: transform var(--duration) var(--ease);
+    will-change: transform;
+    overflow-y: auto;
   }
-  .nav {
-    flex-direction: row;
-    flex-wrap: wrap;
+  .app--drawer-open .sidebar {
+    transform: translateX(0);
   }
+
+  .scrim {
+    display: block;
+  }
+  .app--drawer-open .scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .main {
-    padding: var(--space-6) var(--space-4);
+    padding: var(--space-6) var(--space-4) var(--space-12);
+    max-width: 100%;
+  }
+
+  /* Bigger touch targets for the nav links inside the drawer. */
+  .nav a {
+    padding: var(--space-3) var(--space-3);
+    font-size: var(--text-base);
+  }
+
+  .page-head {
+    margin-bottom: var(--space-6);
+  }
+
+  .card {
+    padding: var(--space-4);
+  }
+
+  /* Stat tiles get tighter and lay out 2-up instead of auto-fit min 180px. */
+  .grid.cols-3,
+  .grid.cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat-tile {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  /* Tables: let cells breathe a little less, lean on the existing
+     horizontal scroll wrapper, and hint that more is scrollable. */
+  table {
+    font-size: var(--text-xs);
+  }
+  thead th,
+  tbody td {
+    padding: var(--space-2) var(--space-3);
+  }
+  .table-wrap {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Filter bars stack their controls full-width so selects/inputs are tappable. */
+  .filters {
+    gap: var(--space-2);
+  }
+  .filters select,
+  .filters input[type="text"],
+  .filters input[type="search"] {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  /* Match cards: stack the two teams vertically instead of side-by-side. */
+  .teams {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+  .teams .vs {
+    display: none;
+  }
+  .team.mirror {
+    flex-direction: row;
+  }
+  .team.mirror .heroes {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .main {
+    padding: var(--space-4) var(--space-3) var(--space-8);
+  }
+
+  /* Single column of stat tiles on the narrowest phones. */
+  .grid.cols-3,
+  .grid.cols-4 {
+    grid-template-columns: 1fr;
+  }
+
+  /* Pagination / toolbars stack and go full-width. */
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+  .toolbar .btn {
+    flex: 1;
+  }
+
+  /* Talent tier label column shrinks so the body has room. */
+  .talent-tier {
+    grid-template-columns: 2.25rem 1fr;
+    gap: var(--space-2);
+  }
+}
+
+/* Respect users who prefer reduced motion: no drawer/scrim animation. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .scrim {
+    transition: none;
   }
 }

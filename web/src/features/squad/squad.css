@@ -232,3 +232,36 @@ tr.is-squad td:first-child {
     transform: translateY(0);
   }
 }
+
+@media (max-width: 600px) {
+  .squad-picker {
+    padding: var(--space-4);
+    border-radius: var(--radius);
+  }
+
+  /* Picker bar wraps so the count sits below a full-width search field. */
+  .squad-picker__bar {
+    flex-wrap: wrap;
+  }
+  .squad-picker__bar input {
+    flex: 1 1 100%;
+  }
+
+  /* Give the candidate list more of the viewport on a tall phone. */
+  .squad-picker__list {
+    max-height: 56vh;
+  }
+
+  /* Action buttons stack full-width for easy tapping. */
+  .squad-picker__actions {
+    flex-direction: column-reverse;
+  }
+  .squad-picker__actions .btn {
+    width: 100%;
+  }
+
+  /* Modal hugs the screen edges and starts near the top. */
+  .modal-backdrop {
+    padding: var(--space-4) var(--space-2);
+  }
+}

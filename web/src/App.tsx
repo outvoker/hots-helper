@@ -1,4 +1,5 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import DashboardPage from "./features/dashboard/DashboardPage";
 import HeroRankingsPage from "./features/heroes/HeroRankingsPage";
 import HeroDetailPage from "./features/heroes/HeroDetailPage";
@@ -21,9 +22,53 @@ const NAV = [
 ];
 
 export default function App() {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const location = useLocation();
+
+  // Close the mobile drawer on navigation so a tap takes you straight to the page.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [location.pathname]);
+
+  // Lock body scroll and allow Escape-to-close while the drawer is open.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [drawerOpen]);
+
   return (
-    <div className="app">
-      <aside className="sidebar">
+    <div className={`app${drawerOpen ? " app--drawer-open" : ""}`}>
+      <header className="app-header">
+        <button
+          className="app-header__menu"
+          aria-label="打开导航菜单"
+          aria-expanded={drawerOpen}
+          aria-controls="primary-nav"
+          onClick={() => setDrawerOpen(true)}
+        >
+          <span className="app-header__bars" aria-hidden="true" />
+        </button>
+        <div className="brand">
+          <span className="mark">⚔</span> HotS Helper
+        </div>
+      </header>
+
+      <button
+        className="scrim"
+        aria-label="关闭导航菜单"
+        tabIndex={drawerOpen ? 0 : -1}
+        onClick={() => setDrawerOpen(false)}
+      />
+
+      <aside className="sidebar" id="primary-nav">
         <div className="brand">
           <span className="mark">⚔</span> HotS Helper
         </div>
