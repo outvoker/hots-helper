@@ -82,10 +82,7 @@ export default function TalentBuildSection({
                           {rec.talent_label}
                         </span>
                         <span className="talent-pick__stat">
-                          胜率 {pct(rec.win_rate)}
-                          <span className="talent-pick__sub">
-                            （{rec.wins}/{rec.games} · 保守 {pct(rec.wilson_lb)}）
-                          </span>
+                          胜率 {pct(rec.win_rate)} · {rec.games} 场
                         </span>
                       </div>
                     )}
@@ -96,7 +93,7 @@ export default function TalentBuildSection({
                             {c.talent_label}
                             <span className="talent-alt__wr">
                               {" "}
-                              {pct(c.win_rate)} · {c.games}场
+                              胜率 {pct(c.win_rate)} · {c.games} 场
                             </span>
                           </span>
                         ))}

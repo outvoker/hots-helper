@@ -229,9 +229,8 @@ class TalentBuildDialog(QDialog):
                 f"<b>{talent_label(rec.talent)}</b> &nbsp;"
                 f"<span style='color:{wr_color};'>"
                 f"{t('ui.talents.winrate')} {rec.win_rate * 100:.0f}%</span> "
-                f"<span style='color:{TEXT_DIM};'>"
-                f"（{rec.wins}/{rec.games} · "
-                f"{t('ui.talents.wilson')} {rec.wilson_lb * 100:.0f}%）</span>"
+                f"<span style='color:{TEXT_DIM};'>· "
+                f"{rec.games}{t('ui.talents.games_suffix')}</span>"
             )
             head.setTextFormat(Qt.RichText)
             head.setWordWrap(True)
@@ -241,7 +240,8 @@ class TalentBuildDialog(QDialog):
         if alts:
             alt_html = " · ".join(
                 f"{talent_label(c.talent)} "
-                f"<span style='color:{TEXT_DIM};'>{c.win_rate * 100:.0f}% "
+                f"<span style='color:{TEXT_DIM};'>"
+                f"{t('ui.talents.winrate')} {c.win_rate * 100:.0f}% "
                 f"/ {c.games}{t('ui.talents.games_suffix')}</span>"
                 for c in alts
             )
