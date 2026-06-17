@@ -137,6 +137,31 @@ export interface SquadCandidate {
   games: number;
 }
 
+export interface TalentChoice {
+  talent: string;
+  talent_label: string;
+  games: number;
+  wins: number;
+  pick_rate: number;
+  win_rate: number;
+  wilson_lb: number;
+}
+
+export interface TalentTier {
+  tier: number;
+  recommended: TalentChoice | null;
+  choices: TalentChoice[];
+}
+
+export interface TalentBuild {
+  hero: string;
+  mode_group: string;
+  total_games: number;
+  total_wins: number;
+  win_rate: number;
+  tiers: TalentTier[];
+}
+
 export interface SquadCandidates {
   candidates: SquadCandidate[];
   suggested: string[];

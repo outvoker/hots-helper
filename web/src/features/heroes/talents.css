@@ -1,0 +1,125 @@
+.talents-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.mode-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--color-void);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.mode-tab {
+  background: transparent;
+  border: none;
+  color: var(--color-text-dim);
+  padding: var(--space-1) var(--space-3);
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  transition: background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
+}
+
+.mode-tab:hover {
+  color: var(--color-text);
+}
+
+.mode-tab--on {
+  background: var(--color-surface-raised);
+  color: var(--color-accent-strong);
+  font-weight: 600;
+}
+
+.talents-summary {
+  margin: var(--space-2) 0 var(--space-4);
+}
+
+.talent-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.talent-tier {
+  display: grid;
+  grid-template-columns: 3rem 1fr;
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.talent-tier:last-child {
+  border-bottom: none;
+}
+
+.talent-tier__label {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--color-gold);
+  padding-top: 2px;
+}
+
+.talent-tier__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.talent-pick {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.talent-pick--rec {
+  padding: var(--space-2) var(--space-3);
+  background: oklch(76% 0.15 195 / 0.1);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+.talent-pick__name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.talent-pick__stat {
+  color: var(--color-win);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.talent-pick__sub {
+  color: var(--color-text-faint);
+  font-weight: 400;
+  font-size: var(--text-xs);
+  margin-left: var(--space-1);
+}
+
+.talent-alts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  padding-left: var(--space-3);
+}
+
+.talent-alt {
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+}
+
+.talent-alt__wr {
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+}

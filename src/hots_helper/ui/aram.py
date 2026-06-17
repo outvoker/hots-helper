@@ -195,6 +195,9 @@ class HeroRankingDialog(QDialog):
         # (after hero name) now that the rank column is gone.
         self.table.sortByColumn(1, Qt.DescendingOrder)
         self.table.verticalHeader().setVisible(True)
+        # Double-click a hero row → open its winrate talent build for the
+        # current mode bucket (ARAM vs standard).
+        self.table.cellDoubleClicked.connect(self._open_talents)
         root.addWidget(self.table, 1)
 
         self.footer_label = QLabel()
@@ -433,6 +436,23 @@ class HeroRankingDialog(QDialog):
     def _show_power_help(self) -> None:
         from .power_help import PowerHelpDialog
         PowerHelpDialog(self).exec()
+
+    # --- talent build ----------------------------------------------------
+
+    def _open_talents(self, row: int, _col: int) -> None:
+        """Open the winrate talent build for the double-clicked hero.
+
+        The board's current mode maps to a talent bucket: ARAM → ``aram``,
+        anything else (Storm League) → ``standard`` (which the build
+        function pools with Quick Match)."""
+        item = self.table.item(row, 0)
+        if item is None:
+            return
+        hero = item.text()
+        board_mode = self.mode_combo.currentData()
+        group = "aram" if board_mode == "ARAM" else "standard"
+        from .talent_build_dialog import TalentBuildDialog
+        TalentBuildDialog(self.store, hero, mode_group=group, parent=self).exec()
 
     # --- search ----------------------------------------------------------
 

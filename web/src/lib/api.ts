@@ -12,6 +12,7 @@ import type {
   Reference,
   SquadCandidates,
   Stats,
+  TalentBuild,
   WeeklyReport,
 } from "./types";
 
@@ -55,6 +56,8 @@ export const api = {
   heroes: (map?: string) => get<HeroAggregate[]>("/api/heroes", { map }),
   hero: (hero: string, map?: string) =>
     get<HeroReport>(`/api/heroes/${encodeURIComponent(hero)}`, { map }),
+  heroTalents: (hero: string, mode: "standard" | "aram" = "standard") =>
+    get<TalentBuild>(`/api/heroes/${encodeURIComponent(hero)}/talents`, { mode }),
 
   searchPlayers: (name: string, map?: string) =>
     get<PlayerSummary[]>("/api/players", { name, map }),

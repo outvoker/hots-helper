@@ -55,6 +55,25 @@ def test_hero_detail_unknown_404(client):
     assert client.get("/api/heroes/不存在的英雄").status_code == 404
 
 
+def test_hero_talents_build(client):
+    body = client.get("/api/heroes/李敏/talents", params={"mode": "standard"}).json()
+    assert body["hero"] == "李敏"
+    assert body["mode_group"] == "standard"
+    assert "tiers" in body
+    if body["tiers"]:
+        tier = body["tiers"][0]
+        assert "recommended" in tier and "choices" in tier
+        if tier["recommended"]:
+            assert "talent_label" in tier["recommended"]
+            assert "win_rate" in tier["recommended"]
+
+
+def test_hero_talents_mode_bucket_defaults(client):
+    # An unknown mode bucket falls back to "standard" rather than erroring.
+    body = client.get("/api/heroes/李敏/talents", params={"mode": "bogus"}).json()
+    assert body["mode_group"] == "standard"
+
+
 def test_player_search(client):
     body = client.get("/api/players", params={"name": "阿离"}).json()
     assert len(body) == 1

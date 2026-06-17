@@ -68,6 +68,40 @@ def hero_report(report: Any) -> dict:
     }
 
 
+def _talent_choice(c: Any) -> dict:
+    """A :class:`hots_helper.talent_build.TalentChoice`."""
+    from ..talent_names import talent_label
+
+    return {
+        "talent": c.talent,
+        "talent_label": talent_label(c.talent),
+        "games": c.games,
+        "wins": c.wins,
+        "pick_rate": c.pick_rate,
+        "win_rate": c.win_rate,
+        "wilson_lb": c.wilson_lb,
+    }
+
+
+def talent_build(build: Any) -> dict:
+    """A :class:`hots_helper.talent_build.TalentBuild`."""
+    return {
+        "hero": build.hero,
+        "mode_group": build.mode_group,
+        "total_games": build.total_games,
+        "total_wins": build.total_wins,
+        "win_rate": build.win_rate,
+        "tiers": [
+            {
+                "tier": ti.tier,
+                "recommended": _talent_choice(ti.recommended) if ti.recommended else None,
+                "choices": [_talent_choice(c) for c in ti.choices],
+            }
+            for ti in build.tiers
+        ],
+    }
+
+
 # --- players / lookup --------------------------------------------------------
 
 
