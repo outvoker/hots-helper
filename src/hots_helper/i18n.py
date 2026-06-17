@@ -468,6 +468,7 @@ _translations: dict[str, dict[str, str]] = {
     "ui.talents.empty": {"zh": "该模式下还没有这个英雄的天赋数据。",
                          "en": "No talent data for this hero in this mode yet."},
     "ui.talents.winrate": {"zh": "胜率", "en": "WR"},
+    "ui.talents.pickrate": {"zh": "选择率", "en": "Pick"},
     "ui.talents.wilson": {"zh": "保守", "en": "LB"},
     "ui.talents.games_suffix": {"zh": "场", "en": "g"},
 

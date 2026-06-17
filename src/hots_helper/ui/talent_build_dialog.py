@@ -227,10 +227,10 @@ class TalentBuildDialog(QDialog):
             head = QLabel(
                 f"<span style='color:{GOLD};font-weight:600;'>T{tier.tier}</span> "
                 f"<b>{talent_label(rec.talent)}</b> &nbsp;"
-                f"<span style='color:{wr_color};'>"
-                f"{t('ui.talents.winrate')} {rec.win_rate * 100:.0f}%</span> "
-                f"<span style='color:{TEXT_DIM};'>· "
-                f"{rec.games}{t('ui.talents.games_suffix')}</span>"
+                f"<span style='color:{TEXT_DIM};'>"
+                f"{t('ui.talents.pickrate')} {rec.pick_rate * 100:.0f}%</span> "
+                f"<span style='color:{wr_color};'>· "
+                f"{t('ui.talents.winrate')} {rec.win_rate * 100:.0f}%</span>"
             )
             head.setTextFormat(Qt.RichText)
             head.setWordWrap(True)
@@ -241,8 +241,8 @@ class TalentBuildDialog(QDialog):
             alt_html = " · ".join(
                 f"{talent_label(c.talent)} "
                 f"<span style='color:{TEXT_DIM};'>"
-                f"{t('ui.talents.winrate')} {c.win_rate * 100:.0f}% "
-                f"/ {c.games}{t('ui.talents.games_suffix')}</span>"
+                f"{t('ui.talents.pickrate')} {c.pick_rate * 100:.0f}% / "
+                f"{t('ui.talents.winrate')} {c.win_rate * 100:.0f}%</span>"
                 for c in alts
             )
             alt = QLabel(alt_html)
