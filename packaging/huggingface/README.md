@@ -19,12 +19,8 @@ Supabase 项目实时同步。
 
 ## Space Secrets
 
-连的 Supabase 项目写死在源码里（`sync_defaults.py`），所以在
-Space → **Settings → Variables and secrets** 通常只需加一个：
-
-| 名称 | 说明 |
-|------|------|
-| `HOTS_ACCESS_PASSWORD` | 全站访问口令（浏览器会弹出输入框，用户名随意） |
+连的 Supabase 项目写死在源码里（`sync_defaults.py`），站点公开访问、
+无需口令，所以通常**不需要配置任何 secret**即可开箱运行。
 
 可选：`SUPABASE_URL` / `SUPABASE_ANON_KEY`（覆盖内置项目，私有部署才需要）、
 `HOTS_REFRESH_SECONDS`（刷新间隔，默认 600 秒）。

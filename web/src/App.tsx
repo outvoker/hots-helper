@@ -2,6 +2,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import DashboardPage from "./features/dashboard/DashboardPage";
 import HeroRankingsPage from "./features/heroes/HeroRankingsPage";
 import HeroDetailPage from "./features/heroes/HeroDetailPage";
+import TalentsPage from "./features/heroes/TalentsPage";
 import PlayerRankingsPage from "./features/players/PlayerRankingsPage";
 import PlayerDetailPage from "./features/players/PlayerDetailPage";
 import BpAdvisorPage from "./features/bp/BpAdvisorPage";
@@ -13,6 +14,7 @@ const NAV = [
   { to: "/", label: "总览", end: true },
   { to: "/matches", label: "比赛记录" },
   { to: "/heroes", label: "英雄强度" },
+  { to: "/talents", label: "天赋推荐" },
   { to: "/players", label: "玩家战力" },
   { to: "/bp", label: "BP 助手" },
   { to: "/weekly", label: "周报" },
@@ -43,6 +45,7 @@ export default function App() {
           <Route path="/matches/:replayId" element={<MatchDetailPage />} />
           <Route path="/heroes" element={<HeroRankingsPage />} />
           <Route path="/heroes/:hero" element={<HeroDetailPage />} />
+          <Route path="/talents" element={<TalentsPage />} />
           <Route path="/players" element={<PlayerRankingsPage />} />
           <Route path="/players/:handle" element={<PlayerDetailPage />} />
           <Route path="/bp" element={<BpAdvisorPage />} />

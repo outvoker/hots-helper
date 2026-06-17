@@ -10,6 +10,7 @@ interface TalentBuildSectionProps {
   loading: boolean;
   error: string | null;
   build: TalentBuild | null;
+  hero?: string;
 }
 
 const MODE_TABS: { value: Mode; label: string }[] = [
@@ -29,11 +30,14 @@ export default function TalentBuildSection({
   loading,
   error,
   build,
+  hero,
 }: TalentBuildSectionProps) {
   return (
     <section className="card">
       <div className="talents-head">
-        <h2 className="section-title">天赋加点推荐（按胜率）</h2>
+        <h2 className="section-title">
+          {hero ? `${hero} · 天赋加点推荐（按胜率）` : "天赋加点推荐（按胜率）"}
+        </h2>
         <div className="mode-tabs" role="tablist" aria-label="模式">
           {MODE_TABS.map((m) => (
             <button

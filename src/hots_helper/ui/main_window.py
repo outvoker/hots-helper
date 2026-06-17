@@ -669,9 +669,21 @@ class MainWindow(QMainWindow):
         self.weekly_btn.clicked.connect(self._show_weekly_report)
         self.weekly_btn.setMinimumHeight(36)
         player_row.addWidget(self.weekly_btn)
+        # Talent build recommendation — a standalone entry (pick a hero
+        # inside the dialog), not tied to the hero board.
+        self.talents_btn = QPushButton()
+        self.talents_btn.clicked.connect(self._show_talents)
+        self.talents_btn.setMinimumHeight(36)
+        player_row.addWidget(self.talents_btn)
+        # Match records browser — filter/paginate ingested replays.
+        self.matches_btn = QPushButton()
+        self.matches_btn.clicked.connect(self._show_matches)
+        self.matches_btn.setMinimumHeight(36)
+        player_row.addWidget(self.matches_btn)
         v.addLayout(player_row)
 
-        for b in (self.sl_btn, self.aram_btn, self.player_rank_btn, self.weekly_btn):
+        for b in (self.sl_btn, self.aram_btn, self.player_rank_btn,
+                  self.weekly_btn, self.talents_btn, self.matches_btn):
             b.style().unpolish(b)
             b.style().polish(b)
         # Trailing flexible space so the card matches the BP card's height.
@@ -760,6 +772,10 @@ class MainWindow(QMainWindow):
         self.player_rank_btn.setToolTip(t("ui.main.player_ranking_tip"))
         self.weekly_btn.setText(t("ui.weekly.btn"))
         self.weekly_btn.setToolTip(t("ui.weekly.btn_tip"))
+        self.talents_btn.setText(t("ui.talents.btn"))
+        self.talents_btn.setToolTip(t("ui.talents.btn_tip"))
+        self.matches_btn.setText(t("ui.matches.btn"))
+        self.matches_btn.setToolTip(t("ui.matches.btn_tip"))
 
         self.log_box.setTitle(t("ui.main.activity"))
         self.credit_label.setText(t("ui.main.credit"))
@@ -1074,6 +1090,32 @@ class MainWindow(QMainWindow):
         self._weekly_dialog.show()
         self._weekly_dialog.raise_()
         self._weekly_dialog.activateWindow()
+
+    def _show_matches(self) -> None:
+        """Open the match-records browser."""
+        if (
+            not hasattr(self, "_matches_dialog")
+            or self._matches_dialog is None
+        ):
+            from .match_list_dialog import MatchListDialog
+            self._matches_dialog = MatchListDialog(self.store, parent=self)
+        else:
+            self._matches_dialog._reload()
+        self._matches_dialog.show()
+        self._matches_dialog.raise_()
+        self._matches_dialog.activateWindow()
+
+    def _show_talents(self) -> None:
+        """Open the standalone talent-build recommendation dialog."""
+        if (
+            not hasattr(self, "_talents_dialog")
+            or self._talents_dialog is None
+        ):
+            from .talent_build_dialog import TalentBuildDialog
+            self._talents_dialog = TalentBuildDialog(self.store, parent=self)
+        self._talents_dialog.show()
+        self._talents_dialog.raise_()
+        self._talents_dialog.activateWindow()
 
     def _show_hero_ranking(self, mode: str = "ARAM") -> None:
         """Open the hero-strength dialog focused on the given mode.

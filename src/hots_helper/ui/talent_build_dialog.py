@@ -12,6 +12,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
+    QCompleter,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -50,17 +52,17 @@ class TalentBuildDialog(QDialog):
     def __init__(
         self,
         store: Store,
-        hero: str,
+        hero: str | None = None,
         *,
         mode_group: str = "standard",
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.store = store
-        self.hero = hero
+        self.hero = hero or ""
         self._mode_group = normalize_mode_group(mode_group)
 
-        self.setWindowTitle(t("ui.talents.dialog_title", hero=hero))
+        self.setWindowTitle(t("ui.talents.window_title"))
         self.resize(520, 640)
         self.setStyleSheet(
             f"QDialog {{ background: {BG_DEEP}; color: {TEXT}; }}"
@@ -95,6 +97,26 @@ class TalentBuildDialog(QDialog):
             head.addWidget(btn)
         root.addLayout(head)
 
+        # Hero picker — searchable combo. Populated from the DB so it
+        # only lists heroes we actually have data for.
+        picker = QHBoxLayout()
+        self.hero_label = QLabel(t("ui.talents.hero_label"))
+        picker.addWidget(self.hero_label)
+        self.hero_combo = QComboBox()
+        self.hero_combo.setEditable(True)
+        self.hero_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.hero_combo.setMinimumWidth(220)
+        self.hero_combo.lineEdit().setClearButtonEnabled(True)
+        self.hero_combo.setStyleSheet(
+            f"QComboBox {{ background:{BG_INPUT}; color:{TEXT};"
+            f" border:1px solid {LINE}; border-radius:4px; padding:4px 8px; }}"
+        )
+        self._populate_hero_combo()
+        self.hero_combo.currentIndexChanged.connect(self._on_hero_change)
+        picker.addWidget(self.hero_combo)
+        picker.addStretch(1)
+        root.addLayout(picker)
+
         self.summary = QLabel("")
         self.summary.setStyleSheet(f"color:{TEXT_DIM};")
         root.addWidget(self.summary)
@@ -112,6 +134,34 @@ class TalentBuildDialog(QDialog):
 
         self._render()
 
+    def _populate_hero_combo(self) -> None:
+        """Fill the combo from heroes present in the DB (canonical names)."""
+        try:
+            rows = self.store.all_heroes(mode_filter=None)
+        except Exception:
+            rows = []
+        names = sorted({str(r["hero"]) for r in rows if r["hero"]})
+        self.hero_combo.blockSignals(True)
+        self.hero_combo.clear()
+        self.hero_combo.addItem(t("ui.talents.hero_placeholder"), "")
+        for n in names:
+            self.hero_combo.addItem(n, n)
+        if self.hero:
+            idx = self.hero_combo.findData(self.hero)
+            if idx >= 0:
+                self.hero_combo.setCurrentIndex(idx)
+        self.hero_combo.blockSignals(False)
+
+        completer = QCompleter(names, self.hero_combo)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.hero_combo.setCompleter(completer)
+
+    def _on_hero_change(self, _i: int) -> None:
+        self.hero = self.hero_combo.currentData() or ""
+        self._render()
+
     def _set_mode(self, group: str) -> None:
         self._mode_group = normalize_mode_group(group)
         self._render()
@@ -125,7 +175,12 @@ class TalentBuildDialog(QDialog):
 
     def _render(self) -> None:
         self._clear_body()
-        self.title_label.setText(t("ui.talents.title", hero=self.hero))
+        self.title_label.setText(t("ui.talents.title_plain"))
+
+        if not self.hero:
+            self.summary.setText(t("ui.talents.pick_hint"))
+            self._body.addStretch(1)
+            return
 
         try:
             self.store.drop_read_snapshot()

@@ -177,8 +177,8 @@ def provider_from_env() -> StoreProvider:
       When unset, fall back to the squad's built-in defaults in
       :mod:`hots_helper.sync_defaults` (the ``sb_publishable_…`` anon key
       is safe to ship in source), so a deployment works out of the box
-      and only needs ``HOTS_ACCESS_PASSWORD`` configured. Set the env
-      vars to point a private deployment at a different project.
+      with zero configuration. Set the env vars to point a private
+      deployment at a different project.
     * ``HOTS_REFRESH_SECONDS`` — refresh interval (default 600).
     """
     from ..sync_defaults import DEFAULT_SUPABASE_ANON_KEY, DEFAULT_SUPABASE_URL

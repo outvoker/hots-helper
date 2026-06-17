@@ -15,7 +15,6 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .auth import install_password_gate
 from .data import StoreProvider, provider_from_env
 from .routers import bp, heroes, matches, meta, players, rankings, weekly
 
@@ -43,8 +42,6 @@ def create_app(provider: StoreProvider | None = None) -> FastAPI:
 
     app = FastAPI(title="HotS Helper", lifespan=lifespan)
     app.state.provider = prov
-
-    install_password_gate(app)
 
     for module in (meta, heroes, players, rankings, bp, matches, weekly):
         app.include_router(module.router)

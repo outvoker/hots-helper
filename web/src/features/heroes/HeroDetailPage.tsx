@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { pct } from "../../lib/format";
@@ -9,17 +8,18 @@ import {
   WinrateBar,
   useAsync,
 } from "../../components/common";
-import TalentBuildSection from "./TalentBuildSection";
 
 export default function HeroDetailPage() {
   const { hero = "" } = useParams();
   const report = useAsync(() => api.hero(hero), [hero]);
-  const [mode, setMode] = useState<"standard" | "aram">("standard");
-  const build = useAsync(() => api.heroTalents(hero, mode), [hero, mode]);
 
   if (report.loading) return <Loading />;
   if (report.error) return <ErrorState message={report.error} />;
   const r = report.data!;
+
+  const tiers = Object.entries(r.talents_by_tier).sort(
+    (a, b) => Number(a[0]) - Number(b[0]),
+  );
 
   return (
     <>
@@ -62,13 +62,43 @@ export default function HeroDetailPage() {
         </div>
       </section>
 
-      <TalentBuildSection
-        mode={mode}
-        onModeChange={setMode}
-        loading={build.loading}
-        error={build.error}
-        build={build.data}
-      />
+      {tiers.length > 0 && (
+        <section className="card">
+          <h2 className="section-title">天赋选择（各层按选取率）</h2>
+          <p className="muted" style={{ marginTop: "-0.5rem" }}>
+            想看按胜率的加点推荐？前往 <Link to="/talents">天赋推荐</Link>。
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>层级</th>
+                  <th>天赋</th>
+                  <th>场次</th>
+                  <th>胜率</th>
+                  <th>选取率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tiers.flatMap(([tier, choices]) =>
+                  choices
+                    .slice()
+                    .sort((a, b) => b.pick_rate - a.pick_rate)
+                    .map((c, i) => (
+                      <tr key={`${tier}-${c.talent}`}>
+                        <td>{i === 0 ? `T${tier}` : ""}</td>
+                        <td>{c.talent}</td>
+                        <td>{c.games}</td>
+                        <td>{c.games ? pct(c.wins / c.games) : "—"}</td>
+                        <td>{pct(c.pick_rate)}</td>
+                      </tr>
+                    )),
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </>
   );
 }
