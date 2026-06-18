@@ -458,10 +458,19 @@ class _PlayerCard(QFrame):
             self.resolved.setVisible(False)
             return
         # When multiple handles share a display name, show them stacked.
+        # A typed name can resolve to several handles via duplicate display
+        # names or the fuzzy fallback in find_players_by_name. Handles with
+        # no matches in scope come back with total_games == 0 and render as
+        # blank, zero-data entries — drop those when at least one handle has
+        # real games, but keep them all when every match is empty so a
+        # genuinely-unseen player still shows a card.
+        summaries = [s for s in self._summaries if s.total_games > 0]
+        if not summaries:
+            summaries = self._summaries
         typed_name = self.name_edit.text().strip()
         blocks: list[str] = []
         any_resolved_diff = False
-        for s in self._summaries:
+        for s in summaries:
             header = ""
             if s.display_name and s.display_name != typed_name:
                 any_resolved_diff = True
@@ -472,9 +481,9 @@ class _PlayerCard(QFrame):
             blocks.append(header + _summary_body_html(s, self._expanded))
         self.body.setText("<hr style='border-color:#333;'>".join(blocks))
         self.resolved.setVisible(any_resolved_diff)
-        if any_resolved_diff and len(self._summaries) == 1:
+        if any_resolved_diff and len(summaries) == 1:
             self.resolved.setText(
-                t("ui.popup.card.found_as", name=self._summaries[0].display_name)
+                t("ui.popup.card.found_as", name=summaries[0].display_name)
             )
         else:
             self.resolved.setText("")
